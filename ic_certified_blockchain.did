@@ -1,0 +1,29 @@
+type Block = record {
+  // Certificate is signed by the NNS root key and contains the root of tree.
+  certificate: blob;
+  // Under b"certified_blocks is a map from i as u32 BE bytes to sha256(data[i]).
+  tree: blob;
+  // The raw data entries.
+  data: vec blob;
+  previous_hash: blob;
+};
+
+service blockchain: {
+  // Stage a block, returning the the data to be certified for informational purposes.
+  prepare: (data: vec blob) -> (blob);
+  // Clear and return nay staged data.
+  unprepare: () -> (vec blob);
+  // Get certificate for the certified data.
+  get_certificate: () -> (opt blob) query;
+  // Append the staged data with certificate and tree.
+  append: (certificate: blob) -> (opt nat64);
+  // Get a certified block.
+  get_block: (index: nat64) -> (Block) query;
+  // Find block index with matching block hash or latest matching data hash.
+  find: (hash: blob) -> (opt nat64) query;
+  // Return the number of blocks stored.
+  length: () -> (nat64) query;
+  authorize: (principal) -> ();
+  deauthorize: (principal) -> ();
+  get_authorized: () -> (vec principal) query;
+}

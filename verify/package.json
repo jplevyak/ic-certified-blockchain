@@ -1,0 +1,20 @@
+{
+  "type": "module",
+  "name": "ic-certified-blockchain-verify",
+  "version": "1.0.0",
+  "description": "Verify an IC Certified Blockchain",
+  "main": "./verify.js",
+  "scripts": {
+    "format": "npx prettier --write .",
+    "run": "node verify.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@dfinity/agent": "^0.14.0",
+    "@dfinity/principal": "^0.14.0"
+  },
+  "devDependencies": {
+    "prettier": "2.7.1"
+  }
+}
