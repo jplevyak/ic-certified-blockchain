@@ -1,0 +1,22 @@
+[package]
+name = "ic-certified-blockchain"
+version = "0.1.0"
+authors = ["John Plevyak <jplevyak@gmail.com>"]
+edition = "2021"
+
+[dependencies]
+candid = "0.8"
+hex = "0.4"
+ic-certified-map = "0.3"
+ic-cdk = "0.6"
+ic-cdk-macros = "0.6"
+ic-stable-structures = "0.2"
+serde = "1"
+serde_bytes = "0.11"
+serde_cbor = "0.11"
+sha2 = "^0.10"
+
+[profile.release]
+debug = false
+lto = true
+opt-level = 'z'
