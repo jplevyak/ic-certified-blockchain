@@ -1,10 +1,9 @@
 import fetch from 'node-fetch';
 import fs from 'fs';
 import crypto from 'crypto';
-import { encode } from 'base64-arraybuffer';
 import sha256 from "sha256";
 import { Principal } from '@dfinity/principal';
-import { Secp256k1PublicKey, Secp256k1KeyIdentity } from '@dfinity/identity';
+import { Secp256k1KeyIdentity } from '@dfinity/identity';
 import { Actor, Cbor, Certificate, HttpAgent } from '@dfinity/agent';
 import { idlFactory } from '../src/declarations/ic-certified-blockchain/ic-certified-blockchain.did.js';
 
@@ -71,23 +70,13 @@ const privateKeyFile = fs.readFileSync(identity_path);
 const privateKeyObject = crypto.createPrivateKey({
     key: privateKeyFile,
     format: 'pem'
-})
-const publicKeyObject = crypto.createPublicKey({
-    key: privateKeyFile,
-    format: 'pem'
-})
-const publicKey = publicKeyObject.export({
-    format: 'pem',
-    type: 'spki'
-})
+});
 const privateKeyDER = privateKeyObject.export({
     format: 'der',
     type: 'sec1',
 });
-const rawPrivateKey = encode(privateKeyDER);
-const rawPrivateKeyBuffer = Uint8Array.from(rawPrivateKey).buffer;
-const privateKey = Uint8Array.from(sha256(rawPrivateKeyBuffer, { asBytes: true }));
-const identity = Secp256k1KeyIdentity.fromSecretKey(Uint8Array.from(privateKey).buffer);
+let secret_key = new Uint8Array(privateKeyDER.slice(7, 7+32));
+const identity = Secp256k1KeyIdentity.fromSecretKey(secret_key);
 const principal = identity.getPrincipal().toText();
 
 // Authorize this identity.
