@@ -75,6 +75,8 @@ const privateKeyDER = privateKeyObject.export({
     format: 'der',
     type: 'sec1',
 });
+const PEM_DER_PREFIX = new Uint8Array([0x30, 0x74, 0x02, 0x01, 0x01, 0x04, 0x20]);
+assert(isBufferEqual(PEM_DER_PREFIX, privateKeyDER.slice(0, 7)));
 let secret_key = new Uint8Array(privateKeyDER.slice(7, 7+32));
 const identity = Secp256k1KeyIdentity.fromSecretKey(secret_key);
 const principal = identity.getPrincipal().toText();
