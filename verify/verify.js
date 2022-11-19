@@ -54,7 +54,7 @@ export function getBlockEntryIndex(block, entry) {
 
 export async function verifyIcCertifiedBlockChainEntry(block, entry_index, canisterId, rootKey = IC_ROOT_KEY) {
   entry_index = toBEBytesUint32(entry_index);
-  let canisterIdPrincipal = Principal.fromText(canisterId);
+  const canisterIdPrincipal = Principal.fromText(canisterId);
   try {
     const cert = await Certificate.create({
       certificate: block.certificate,
@@ -67,16 +67,17 @@ export async function verifyIcCertifiedBlockChainEntry(block, entry_index, canis
   }
   const certifiedData = cert.lookup([
     "canister", canisterIdPrincipal.toUint8Array(), "certified_data"]);
-  let block_tree = Cbor.decode(block.tree);
-  let reconstructed = await reconstruct(block_tree);
+  const block_tree = Cbor.decode(block.tree);
+  const reconstructed = await reconstruct(block_tree);
 
   if (!isBufferEqual(certifiedData, reconstructed)) {
     console.log('CertifiedData does not match tree hash');
     return false;
   }
-  const certified_blocka_0_hash = lookup_path(["certified_blocks", entry_index], block_tree);
-  if (!isBufferEqual(new Uint8Array(certified_blocka_0_hash), blocka_0_hash)) {
-    console.log('Certifiedi block entry hash does not match block entry hash');
+  const certified_entry_hash = lookup_path(["certified_blocks", entry_index], block_tree);
+  const entry_hash = new Uint8Array(fromHex(sha256(entry)));
+  if (!isBufferEqual(new Uint8Array(certified_entry_hash), entry_hash)) {
+    console.log('Certified block entry hash does not match block entry hash');
     return false;
   }
   return true;
