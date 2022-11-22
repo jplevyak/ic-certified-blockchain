@@ -12,7 +12,7 @@ The blockchain is a sequence of blocks of the format:
 type Block = record {
   // Certificate is signed by the NNS root key and contains the root of tree.
   certificate: blob;
-  // Under b"certified_blocks is a map from i as u32 BE bytes to sha256(data[i]).
+  // Under label "certified_blocks" is a map from i as u32 BE bytes to sha256(data[i]).
   tree: blob;
   // The raw data entries.
   data: vec blob;
