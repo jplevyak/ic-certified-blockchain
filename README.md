@@ -61,6 +61,16 @@ A block is an array of byte arrays (entries).  First the block is staged by call
 
 The canister smart contract stores all persistent data in stable memory.  There is no provision for deleting or rewriting blocks short of reinstalling or deleting the canister.  However, because the blocks are certified, they can be backed up remotely and validated offline.  The blocks can even be transfered to a different canister smart contract by re-storing the blocks and substituting the original certificate during the `append()` phase.
 
+## Usage
+
+### Single Writer
+
+A single writer should use `prepare()` then `get_certificate()` then `append()`.  An error in `prepare()` means that there is already a prepared block which needs `get_certificate()` then `append()`.  An error in `get_certificate()` or `append()` mean that there is no prepared block or that the certificate is stale.  The client should use `get_block()` to determine if the data has already been written and retry if not. 
+
+### Multiple Writer
+
+Multiple writers can either use the single writer workflow or they can all call `prepare_some()` and then `get_certificate()` followed by `append()` recognizing that the `get_certificate()` `append()` commit sequence might fail if there is a race.  Use of `prepare_some()` may result in higher throughput.  Clients may defer or retry the commit sequence until `get_certificate()` returns None.  Note that there is no provision in this code for DOS prevention e.g. logging callers of `prepare_some()` which may be advisable in some use cases.
+
 ## Development
 
 ### Depenedencies
