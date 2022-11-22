@@ -24,13 +24,15 @@ The canister smart contract provides an API to store, find entries and retrieve 
 
 ```
 service blockchain: {
-  // Stage a block, returning the the data to be certified for informational purposes.
+  // Stage a block, returning the certified data for informational purposes.
+  // Traps if some data is already staged.
   prepare: (data: vec blob) -> (blob);
-  // Clear and return nay staged data.
-  unprepare: () -> (vec blob);
-  // Get certificate for the certified data.
+  // Stage some (more) data into a block, returning the certified data for informational purposes.
+  prepare_some: (data: vec blob) -> (blob);
+  // Get certificate for the certified data. Returns None if nothing is staged.
   get_certificate: () -> (opt blob) query;
-  // Append the staged data with certificate and tree.
+  // Append the staged data with certificate and tree.  Traps if the certificate is stale.
+  // Returns None if there is nothing staged.
   append: (certificate: blob) -> (opt nat64);
   // Get a certified block.
   get_block: (index: nat64) -> (Block) query;
@@ -38,6 +40,7 @@ service blockchain: {
   find: (hash: blob) -> (opt nat64) query;
   // Return the number of blocks stored.
   length: () -> (nat64) query;
+  // Manage the set of Principals allowed to prepare and append.
   authorize: (principal) -> ();
   deauthorize: (principal) -> ();
   get_authorized: () -> (vec principal) query;
@@ -46,7 +49,9 @@ service blockchain: {
 
 ## Certification
 
-The certificate constains an NNS signed delegation for the canister to the subnet which certifies the canister root hash along with the date.  The canister root hash is the root of the Merkle tree containing the hashes of all the block entries.  This enables each entry to be independently certified by extracting the corresponding path from the tree.  Code to verify blocks is found in the `./verify` directory.
+The certificate contains an NNS signed delegation for the canister to the subnet which certifies the canister root hash along with the date.  The canister root hash is the root of the Merkle tree containing the hashes of all the block entries.  This enables each entry to be independently certified by extracting the corresponding path from the tree.  Code to verify blocks is found in the `./verify` directory.
+
+Additional verifications e.g. the signature of the appender should be verified at the application level.
 
 ## Storing Blocks
 
@@ -62,6 +67,7 @@ The canister smart contract stores all persistent data in stable memory.  There 
 
 * node, npm
 * rustup, cargo, rustc with wasm
+* hashtree.rs is copied from github.com/dfinity/agent-rssrc/hash\_tree/mod.rs
 
 ### Setup
 

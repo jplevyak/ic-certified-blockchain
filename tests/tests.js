@@ -112,10 +112,6 @@ blocka_0[7] = 1;
 let blocka = [blocka_0];
 console.log('block a', [toHex(blocka_0)]);
 
-console.log('unprepare any outstanding block');
-let pre_unprepare = await actor.unprepare();
-console.log('outstanding block', pre_unprepare);
-
 console.log('prepare block a');
 let certified_data = await actor.prepare(blocka);
 console.log('block a certified data', toHex(certified_data));
@@ -174,6 +170,34 @@ console.log('certified_blocka_0_hash', toHex(new Uint8Array(certified_blocka_0_h
 console.log('blocka_0_hash', toHex(blocka_0_hash));
 assert(isBufferEqual(new Uint8Array(certified_blocka_0_hash), blocka_0_hash));
 console.log('certified_blocka_0_hash == blocka_0_hash');
+
+let blockb_0 = new Uint8Array(8);
+blocka_0[7] = 2;
+
+let blockb = [blockb_0];
+console.log('block a', [toHex(blocka_0)]);
+
+console.log('prepare_some block b 0');
+certified_data = await actor.prepare_some(blockb);
+console.log('block b 0 certified data', toHex(certified_data));
+
+let blockb_1 = new Uint8Array(8);
+blockb_1[7] = 3;
+blockb = [blockb_0];
+
+console.log('prepare_some block b 1');
+certified_data = await actor.prepare_some(blockb);
+console.log('block b 1 certified data', toHex(certified_data));
+
+console.log('get certificate');
+certificate = await actor.get_certificate();
+console.log('block a certificate', toHex(certificate[0]));
+
+result = await actor.append(certificate[0]);
+console.log('append block b', result);
+index = result[0];
+
+console.log('blockchain length', await actor.length());
 
 console.log('deauthorizing', identity.getPrincipal().toText());
 await actor.deauthorize(identity.getPrincipal());
