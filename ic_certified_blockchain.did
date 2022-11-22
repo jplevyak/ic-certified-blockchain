@@ -8,7 +8,13 @@ type Block = record {
   previous_hash: blob;
 };
 
-service blockchain: {
+type Auth = variant { User; Admin };
+type Authorization = record {
+  id: principal;
+  auth: Auth;
+};
+
+service blockchain: (opt text) -> {
   // Stage a block, returning the certified data for informational purposes.
   // Traps if some data is already staged.
   prepare: (data: vec blob) -> (blob);
@@ -25,8 +31,10 @@ service blockchain: {
   find: (hash: blob) -> (opt nat64) query;
   // Return the number of blocks stored.
   length: () -> (nat64) query;
-  // Manage the set of Principals allowed to prepare and append.
-  authorize: (principal) -> ();
+  // Return hex string representing the hash of the last block or 0.
+  last_hash: () -> (text) query;
+  // Manage the set of Principals allowed to prepare and append (user) or authorize (admin).
+  authorize: (principal, Auth) -> ();
   deauthorize: (principal) -> ();
-  get_authorized: () -> (vec principal) query;
+  get_authorized: () -> (vec Authorization) query;
 }

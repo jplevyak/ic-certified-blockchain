@@ -23,7 +23,13 @@ type Block = record {
 The canister smart contract provides an API to store, find entries and retrieve blocks:
 
 ```
-service blockchain: {
+type Auth = variant { User; Admin };
+type Authorization = record {
+  id: principal;
+  auth: Auth;
+};
+
+service blockchain: (opt text) -> {
   // Stage a block, returning the certified data for informational purposes.
   // Traps if some data is already staged.
   prepare: (data: vec blob) -> (blob);
@@ -40,10 +46,12 @@ service blockchain: {
   find: (hash: blob) -> (opt nat64) query;
   // Return the number of blocks stored.
   length: () -> (nat64) query;
-  // Manage the set of Principals allowed to prepare and append.
-  authorize: (principal) -> ();
+  // Return hex string representing the hash of the last block or 0.
+  last_hash: () -> (text) query;
+  // Manage the set of Principals allowed to prepare and append (user) or authorize (admin).
+  authorize: (principal, Auth) -> ();
   deauthorize: (principal) -> ();
-  get_authorized: () -> (vec principal) query;
+  get_authorized: () -> (vec Authorization) query;
 }
 ```
 
@@ -70,6 +78,10 @@ A single writer should use `prepare()` then `get_certificate()` then `append()`.
 ### Multiple Writer
 
 Multiple writers can either use the single writer workflow or they can all call `prepare_some()` and then `get_certificate()` followed by `append()` recognizing that the `get_certificate()` `append()` commit sequence might fail if there is a race.  Use of `prepare_some()` may result in higher throughput.  Clients may defer or retry the commit sequence until `get_certificate()` returns None.  Note that there is no provision in this code for DOS prevention e.g. logging callers of `prepare_some()` which may be advisable in some use cases.
+
+### Backup and Remove Old Blocks
+
+In some use cases it may be desirable to backup and remove old blocks from the canister smart contract.  A controller principal with `admin` authoriation should remove all user permissions to prevent updates to the blockchain, `get_block` all the blocks and back them up, then deploy with `mode=reinstall` to wipe stable memory and (optionally) pass in the final block's hash (the result of `last_hash()`) as a 64-character hex value: `dfx deploy --argument '(opt "AABB...")'`.
 
 ## Development
 

@@ -4,10 +4,15 @@ use ic_cdk::export::candid::candid_method;
 use ic_certified_map::{AsHashTree, Hash, RbTree};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
 use ic_stable_structures::{log::Log, DefaultMemoryImpl, StableBTreeMap, Storable};
+use num::FromPrimitive;
 use serde::Serialize;
 use sha2::Digest;
+use std::convert::TryInto;
 use std::fmt::Debug;
 use std::{borrow::Cow, cell::RefCell};
+#[macro_use]
+extern crate num_derive;
+
 mod hash_tree;
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
@@ -17,6 +22,18 @@ type BlockTree = RbTree<Blob, Hash>;
 
 const MAX_KEY_SIZE: u32 = 32;
 const MAX_VALUE_SIZE: u32 = 8;
+
+#[derive(Clone, Debug, CandidType, Deserialize, FromPrimitive)]
+enum Auth {
+    User,
+    Admin,
+}
+
+#[derive(Clone, Debug, CandidType, Deserialize)]
+struct Authorization {
+    id: Principal,
+    auth: Auth,
+}
 
 #[derive(Clone, Debug, CandidType, Deserialize)]
 struct BlobHash(Hash);
@@ -62,18 +79,19 @@ thread_local! {
             MAX_VALUE_SIZE
         )
     );
-    static AUTH: RefCell<StableBTreeMap<Memory, Blob, u8>> = RefCell::new(
+    static AUTH: RefCell<StableBTreeMap<Memory, Blob, u32>> = RefCell::new(
         StableBTreeMap::init(
             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(3))),
             MAX_KEY_SIZE,
-            1
+            4
         )
     );
     static DATA: RefCell<Data> = RefCell::new(Data::default());
     static TREE: RefCell<BlockTree> = RefCell::new(BlockTree::default());
+    static PREVIOUS_HASH: RefCell<[u8; 32]> = RefCell::new(<[u8; 32]>::default());
 }
 
-#[ic_cdk_macros::update(guard = "is_authorized")]
+#[ic_cdk_macros::update(guard = "is_authorized_user")]
 #[candid_method]
 fn prepare(data: Data) -> Blob {
     if DATA.with(|d| d.borrow().len()) > 0 {
@@ -82,7 +100,7 @@ fn prepare(data: Data) -> Blob {
     prepare_some(data)
 }
 
-#[ic_cdk_macros::update(guard = "is_authorized")]
+#[ic_cdk_macros::update(guard = "is_authorized_user")]
 #[candid_method]
 fn prepare_some(new_data: Data) -> Blob {
     let mut tree = TREE.with(|t| t.take());
@@ -120,7 +138,7 @@ fn get_certificate() -> Option<Blob> {
     }
 }
 
-#[ic_cdk_macros::update(guard = "is_authorized")]
+#[ic_cdk_macros::update(guard = "is_authorized_user")]
 #[candid_method]
 fn append(certificate: Blob) -> Option<u64> {
     let data = DATA.with(|d| d.take());
@@ -157,7 +175,7 @@ fn append(certificate: Blob) -> Option<u64> {
     });
     LOG.with(|l| {
         let l = l.borrow_mut();
-        let mut previous_hash = <[u8; 32]>::default();
+        let mut previous_hash = PREVIOUS_HASH.with(|h| h.borrow().clone());
         if l.len() > 0 {
             previous_hash =
                 sha2::Sha256::digest(Encode!(&l.get(l.len() - 1).unwrap()).unwrap()).into();
@@ -196,30 +214,61 @@ fn length() -> u64 {
     LOG.with(|l| l.borrow().len() as u64)
 }
 
+#[ic_cdk_macros::query]
+#[candid_method]
+fn last_hash() -> String {
+    LOG.with(|l| {
+        let l = l.borrow();
+        if l.len() == 0 {
+            return "0000000000000000000000000000000000000000000000000000000000000000".to_string();
+        }
+        let previous_hash: [u8; 32] =
+            sha2::Sha256::digest(Encode!(&l.get(l.len() - 1).unwrap()).unwrap()).into();
+        hex::encode(previous_hash)
+    })
+}
+
 #[ic_cdk_macros::init]
-fn init() {
-    authorize_principal(&ic_cdk::caller());
+fn canister_init(previous_hash: Option<String>) {
+    authorize_principal(&ic_cdk::caller(), Auth::Admin);
+    if let Some(previous_hash) = previous_hash {
+        let _x = hex::decode(&previous_hash).unwrap();
+        if let Ok(previous_hash) = hex::decode(&previous_hash) {
+            if previous_hash.len() == 32 {
+                PREVIOUS_HASH.with(|h| {
+                    *h.borrow_mut() = previous_hash.try_into().unwrap();
+                });
+                return;
+            }
+        }
+        ic_cdk::trap("previous must be a 64 hex string");
+    }
 }
 
 #[ic_cdk_macros::query]
 #[candid_method]
-fn get_authorized() -> Vec<Principal> {
-    let mut authorized = Vec::<Principal>::new();
+fn get_authorized() -> Vec<Authorization> {
+    let mut authorized = Vec::<Authorization>::new();
     AUTH.with(|a| {
-        for (k, _) in a.borrow().iter() {
-            authorized.push(Principal::from_slice(&k));
+        for (k, v) in a.borrow().iter() {
+            if let Some(auth) = Auth::from_i32(v as i32) {
+                authorized.push(Authorization {
+                    id: Principal::from_slice(&k),
+                    auth,
+                });
+            }
         }
     });
     authorized
 }
 
-#[ic_cdk_macros::update(guard = "is_authorized")]
+#[ic_cdk_macros::update(guard = "is_authorized_admin")]
 #[candid_method]
-fn authorize(principal: Principal) {
-    authorize_principal(&principal);
+fn authorize(principal: Principal, value: Auth) {
+    authorize_principal(&principal, value);
 }
 
-#[ic_cdk_macros::update(guard = "is_authorized")]
+#[ic_cdk_macros::update(guard = "is_authorized_admin")]
 #[candid_method]
 fn deauthorize(principal: Principal) {
     AUTH.with(|a| {
@@ -229,20 +278,34 @@ fn deauthorize(principal: Principal) {
     });
 }
 
-fn authorize_principal(principal: &Principal) {
+fn authorize_principal(principal: &Principal, value: Auth) {
     AUTH.with(|a| {
         a.borrow_mut()
-            .insert(principal.as_slice().to_vec(), 1)
+            .insert(principal.as_slice().to_vec(), value as u32)
             .unwrap();
     });
 }
 
-fn is_authorized() -> Result<(), String> {
+fn is_authorized_user() -> Result<(), String> {
     AUTH.with(|a| {
         if a.borrow()
             .contains_key(&ic_cdk::caller().as_slice().to_vec())
         {
             Ok(())
+        } else {
+            Err("You are not authorized".to_string())
+        }
+    })
+}
+
+fn is_authorized_admin() -> Result<(), String> {
+    AUTH.with(|a| {
+        if let Some(value) = a.borrow().get(&ic_cdk::caller().as_slice().to_vec()) {
+            if value >= Auth::Admin as u32 {
+                Ok(())
+            } else {
+                Err("You are not authorized as Admin".to_string())
+            }
         } else {
             Err("You are not authorized".to_string())
         }

@@ -75,7 +75,7 @@ const principal = identity.getPrincipal().toText();
 
 // Authorize this identity.
 console.log('authorizing principal', principal);
-let authorize_cmd = 'dfx canister call  ic-certified-blockchain authorize \'(principal "' + principal + '")\'';
+let authorize_cmd = 'dfx canister call  ic-certified-blockchain authorize \'(principal "' + principal + '", variant{ Admin })\'';
 console.log('exec:', authorize_cmd, await exec(authorize_cmd));
 
 // Get canister id.
