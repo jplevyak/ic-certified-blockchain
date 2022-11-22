@@ -33,7 +33,7 @@ service blockchain: (opt text) -> {
   length: () -> (nat64) query;
   // Return hex string representing the hash of the last block or 0.
   last_hash: () -> (text) query;
-  // Manage the set of Principals allowed to prepare and append (user) or authorize (admin).
+  // Manage the set of Principals allowed to prepare and append (User) or authorize (Admin).
   authorize: (principal, Auth) -> ();
   deauthorize: (principal) -> ();
   get_authorized: () -> (vec Authorization) query;

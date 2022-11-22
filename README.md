@@ -48,7 +48,7 @@ service blockchain: (opt text) -> {
   length: () -> (nat64) query;
   // Return hex string representing the hash of the last block or 0.
   last_hash: () -> (text) query;
-  // Manage the set of Principals allowed to prepare and append (user) or authorize (admin).
+  // Manage the set of Principals allowed to prepare and append (User) or authorize (Admin).
   authorize: (principal, Auth) -> ();
   deauthorize: (principal) -> ();
   get_authorized: () -> (vec Authorization) query;
@@ -81,7 +81,7 @@ Multiple writers can either use the single writer workflow or they can all call 
 
 ### Backup and Remove Old Blocks
 
-In some use cases it may be desirable to backup and remove old blocks from the canister smart contract.  A controller principal with `admin` authoriation should remove all user permissions to prevent updates to the blockchain, `get_block` all the blocks and back them up, then deploy with `mode=reinstall` to wipe stable memory and (optionally) pass in the final block's hash (the result of `last_hash()`) as a 64-character hex value: `dfx deploy --argument '(opt "AABB...")'`.
+In some use cases it may be desirable to backup and remove old blocks from the canister smart contract.  A controller principal with `Admin` authoriation should remove all user permissions to prevent updates to the blockchain, `get_block` all the blocks and back them up, then deploy with `mode=reinstall` to wipe stable memory and (optionally) pass in the final block's hash (the result of `last_hash()`) as a 64-character hex value: `dfx deploy --argument '(opt "AABB...")'`.
 
 ## Development
 
