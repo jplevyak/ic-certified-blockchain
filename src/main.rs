@@ -1,9 +1,11 @@
-use candid::{CandidType, Deserialize, Encode, Principal};
+use candid::{CandidType, Decode, Deserialize, Encode, Principal};
 use hash_tree::{HashTree, LookupResult};
 use ic_cdk::export::candid::candid_method;
 use ic_certified_map::{AsHashTree, Hash, RbTree};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
-use ic_stable_structures::{log::Log, DefaultMemoryImpl, StableBTreeMap, Storable};
+use ic_stable_structures::{
+    cell::Cell as StableCell, log::Log, DefaultMemoryImpl, StableBTreeMap, Storable,
+};
 use num::FromPrimitive;
 use serde::Serialize;
 use sha2::Digest;
@@ -35,8 +37,11 @@ struct Authorization {
     auth: Auth,
 }
 
-#[derive(Clone, Debug, CandidType, Deserialize)]
+#[derive(Clone, Debug, Default, CandidType, Deserialize)]
 struct BlobHash(Hash);
+
+#[derive(Clone, Debug, Default, CandidType, Deserialize)]
+struct StoreData(Data);
 
 #[derive(Clone, Debug, CandidType, Deserialize)]
 struct Block {
@@ -55,11 +60,21 @@ struct ReplicaCertificate {
 
 impl Storable for BlobHash {
     fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
-        Cow::Owned(self.0.to_vec())
+        Cow::Owned(Encode!(self).unwrap())
     }
 
     fn from_bytes(bytes: Vec<u8>) -> Self {
-        BlobHash(bytes.try_into().unwrap())
+        Decode!(&bytes, Self).unwrap()
+    }
+}
+
+impl Storable for StoreData {
+    fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
+        Cow::Owned(Encode!(self).unwrap())
+    }
+
+    fn from_bytes(bytes: Vec<u8>) -> Self {
+        Decode!(&bytes, Self).unwrap()
     }
 }
 
@@ -73,56 +88,69 @@ thread_local! {
         ).unwrap()
     );
     static MAP: RefCell<StableBTreeMap<Memory, BlobHash, u64>> = RefCell::new(
-        StableBTreeMap::init(
+        StableBTreeMap::init_with_sizes(
             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(2))),
             MAX_KEY_SIZE,
             MAX_VALUE_SIZE
         )
     );
     static AUTH: RefCell<StableBTreeMap<Memory, Blob, u32>> = RefCell::new(
-        StableBTreeMap::init(
+        StableBTreeMap::init_with_sizes(
             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(3))),
             MAX_KEY_SIZE,
             4
         )
     );
-    static DATA: RefCell<Data> = RefCell::new(Data::default());
-    static TREE: RefCell<BlockTree> = RefCell::new(BlockTree::default());
-    static PREVIOUS_HASH: RefCell<[u8; 32]> = RefCell::new(<[u8; 32]>::default());
+    static DATA: RefCell<StableCell<StoreData, Memory>> = RefCell::new(StableCell::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(4))),
+            StoreData::default()).unwrap());
+    static PREVIOUS_HASH: RefCell<StableCell<BlobHash, Memory>> = RefCell::new(StableCell::init(
+        MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(6))),
+        <BlobHash>::default()).unwrap());
 }
 
 #[ic_cdk_macros::update(guard = "is_authorized_user")]
 #[candid_method]
 fn prepare(data: Data) -> Blob {
-    if DATA.with(|d| d.borrow().len()) > 0 {
+    if DATA.with(|d| d.borrow().get().0.len()) > 0 {
         ic_cdk::trap("Block already prepared");
     }
     prepare_some(data)
 }
 
+fn build_tree(data: &Data) -> BlockTree {
+    let mut tree = BlockTree::default();
+    for (i, d) in data.iter().enumerate() {
+        let hash: [u8; 32] = sha2::Sha256::digest(d).into();
+        tree.insert(i.to_be_bytes().to_vec(), hash); // For lexigraphic order.
+    }
+    tree
+}
+
+fn take_cell<T>(c: &mut StableCell<T, Memory>) -> T
+where
+    T: Clone + Default + Storable,
+{
+    let v = c.get().clone();
+    c.set(T::default()).unwrap();
+    v
+}
+
 #[ic_cdk_macros::update(guard = "is_authorized_user")]
 #[candid_method]
 fn prepare_some(new_data: Data) -> Blob {
-    let mut tree = TREE.with(|t| t.take());
-    let mut data = DATA.with(|d| d.take());
-    let data_len = data.len();
-    for (i, d) in new_data.iter().enumerate() {
-        let hash: [u8; 32] = sha2::Sha256::digest(d).into();
-        let i = (data_len + i) as u32;
+    let mut data = DATA.with(|d| take_cell(&mut d.borrow_mut()).0);
+    for d in new_data.iter() {
         data.push(d.to_vec());
-        tree.insert(i.to_be_bytes().to_vec(), hash); // For lexigraphic order.
     }
+    let tree = build_tree(&data);
     DATA.with(|d| {
-        *d.borrow_mut() = data.to_vec();
+        d.borrow_mut().set(StoreData(data.to_vec())).unwrap();
     });
-    TREE.with(|t| {
-        *t.borrow_mut() = tree;
-    });
-    set_certificate()
+    set_certificate(&tree.root_hash())
 }
 
-fn set_certificate() -> Blob {
-    let root_hash = TREE.with(|t| t.borrow().root_hash());
+fn set_certificate(root_hash: &Hash) -> Blob {
     let certified_data = &ic_certified_map::labeled_hash(b"certified_blocks", &root_hash);
     ic_cdk::api::set_certified_data(certified_data);
     certified_data.to_vec()
@@ -131,7 +159,7 @@ fn set_certificate() -> Blob {
 #[ic_cdk_macros::query]
 #[candid_method]
 fn get_certificate() -> Option<Blob> {
-    if DATA.with(|d| d.borrow().len()) == 0 {
+    if DATA.with(|d| d.borrow().get().0.len()) == 0 {
         None
     } else {
         ic_cdk::api::data_certificate()
@@ -141,30 +169,28 @@ fn get_certificate() -> Option<Blob> {
 #[ic_cdk_macros::update(guard = "is_authorized_user")]
 #[candid_method]
 fn append(certificate: Blob) -> Option<u64> {
-    let data = DATA.with(|d| d.take());
+    let data = DATA.with(|d| take_cell(&mut d.borrow_mut()).0);
     if data.len() == 0 {
         return None;
     }
+    let tree = build_tree(&data);
     // Check that the certificate corresponds to our tree.  Note: we are
     // not fully verifying the certificate, just checking for races.
-    TREE.with(|t| {
-        let root_hash = t.borrow().root_hash();
-        let certified_data = &ic_certified_map::labeled_hash(b"certified_blocks", &root_hash);
-        let cert: ReplicaCertificate = serde_cbor::from_slice(&certificate[..]).unwrap();
-        let canister_id = ic_cdk::api::id();
-        let canister_id = canister_id.as_slice();
-        if let LookupResult::Found(certified_data_bytes) = cert.tree.lookup_path(&[
-            "canister".into(),
-            canister_id.into(),
-            "certified_data".into(),
-        ]) {
-            assert!(certified_data == certified_data_bytes);
-        } else {
-            ic_cdk::trap("certificate mismatch");
-        }
-    });
+    let root_hash = tree.root_hash();
+    let certified_data = &ic_certified_map::labeled_hash(b"certified_blocks", &root_hash);
+    let cert: ReplicaCertificate = serde_cbor::from_slice(&certificate[..]).unwrap();
+    let canister_id = ic_cdk::api::id();
+    let canister_id = canister_id.as_slice();
+    if let LookupResult::Found(certified_data_bytes) = cert.tree.lookup_path(&[
+        "canister".into(),
+        canister_id.into(),
+        "certified_data".into(),
+    ]) {
+        assert!(certified_data == certified_data_bytes);
+    } else {
+        ic_cdk::trap("certificate mismatch");
+    }
     let index = LOG.with(|l| l.borrow().len());
-    let tree = TREE.with(|t| t.take());
     MAP.with(|m| {
         let mut m = m.borrow_mut();
         for (_, h) in tree.iter() {
@@ -175,7 +201,7 @@ fn append(certificate: Blob) -> Option<u64> {
     });
     LOG.with(|l| {
         let l = l.borrow_mut();
-        let mut previous_hash = PREVIOUS_HASH.with(|h| h.borrow().clone());
+        let mut previous_hash = PREVIOUS_HASH.with(|h| h.borrow().get().0.clone());
         if l.len() > 0 {
             previous_hash =
                 sha2::Sha256::digest(Encode!(&l.get(l.len() - 1).unwrap()).unwrap()).into();
@@ -236,7 +262,9 @@ fn canister_init(previous_hash: Option<String>) {
         if let Ok(previous_hash) = hex::decode(&previous_hash) {
             if previous_hash.len() == 32 {
                 PREVIOUS_HASH.with(|h| {
-                    *h.borrow_mut() = previous_hash.try_into().unwrap();
+                    h.borrow_mut()
+                        .set(BlobHash(previous_hash.try_into().unwrap()))
+                        .unwrap();
                 });
                 return;
             }
@@ -314,7 +342,8 @@ fn is_authorized_admin() -> Result<(), String> {
 
 #[ic_cdk_macros::post_upgrade]
 fn post_upgrade() {
-    set_certificate();
+    let tree = DATA.with(|d| build_tree(&d.borrow().get().0));
+    set_certificate(&tree.root_hash());
 }
 
 ic_cdk::export::candid::export_service!();

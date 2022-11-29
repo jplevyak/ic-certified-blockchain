@@ -18,7 +18,7 @@ service blockchain: (opt text) -> {
   // Stage a block, returning the certified data for informational purposes.
   // Traps if some data is already staged.
   prepare: (data: vec blob) -> (blob);
-  // Stage some (more) data into a block, returning the certified data for informational purposes.
+  // Stage some (more) data into a block, returning the hash of the root of tree for informational purposes.
   prepare_some: (data: vec blob) -> (blob);
   // Get certificate for the certified data. Returns None if nothing is staged.
   get_certificate: () -> (opt blob) query;
@@ -27,7 +27,7 @@ service blockchain: (opt text) -> {
   append: (certificate: blob) -> (opt nat64);
   // Get a certified block.
   get_block: (index: nat64) -> (Block) query;
-  // Find block index with matching block hash or latest matching data hash.
+  // Find block index with matching block hash or latest matching data entry hash.
   find: (hash: blob) -> (opt nat64) query;
   // Return the number of blocks stored.
   length: () -> (nat64) query;
