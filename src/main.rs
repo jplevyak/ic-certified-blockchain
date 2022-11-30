@@ -118,12 +118,13 @@ fn prepare(data: Data) -> Blob {
     prepare_some(data)
 }
 
-fn build_tree(data: &Data) -> BlockTree {
+fn build_tree(data: &Data, previous_hash: &Hash) -> BlockTree {
     let mut tree = BlockTree::default();
     for (i, d) in data.iter().enumerate() {
         let hash: [u8; 32] = sha2::Sha256::digest(d).into();
         tree.insert(i.to_be_bytes().to_vec(), hash); // For lexigraphic order.
     }
+    tree.insert("previous_hash".as_bytes().to_vec(), *previous_hash); // For lexigraphic order.
     tree
 }
 
@@ -143,7 +144,8 @@ fn prepare_some(new_data: Data) -> Blob {
     for d in new_data.iter() {
         data.push(d.to_vec());
     }
-    let tree = build_tree(&data);
+    let previous_hash = get_previous_hash();
+    let tree = build_tree(&data, &previous_hash);
     DATA.with(|d| {
         d.borrow_mut().set(StoreData(data.to_vec())).unwrap();
     });
@@ -166,6 +168,18 @@ fn get_certificate() -> Option<Blob> {
     }
 }
 
+fn get_previous_hash() -> Hash {
+    let mut previous_hash = PREVIOUS_HASH.with(|h| h.borrow().get().0.clone());
+    LOG.with(|l| {
+        let l = l.borrow();
+        if l.len() > 0 {
+            previous_hash =
+                sha2::Sha256::digest(Encode!(&l.get(l.len() - 1).unwrap()).unwrap()).into();
+        }
+    });
+    previous_hash
+}
+
 #[ic_cdk_macros::update(guard = "is_authorized_user")]
 #[candid_method]
 fn append(certificate: Blob) -> Option<u64> {
@@ -173,7 +187,8 @@ fn append(certificate: Blob) -> Option<u64> {
     if data.len() == 0 {
         return None;
     }
-    let tree = build_tree(&data);
+    let previous_hash = get_previous_hash();
+    let tree = build_tree(&data, &previous_hash);
     // Check that the certificate corresponds to our tree.  Note: we are
     // not fully verifying the certificate, just checking for races.
     let root_hash = tree.root_hash();
@@ -201,11 +216,6 @@ fn append(certificate: Blob) -> Option<u64> {
     });
     LOG.with(|l| {
         let l = l.borrow_mut();
-        let mut previous_hash = PREVIOUS_HASH.with(|h| h.borrow().get().0.clone());
-        if l.len() > 0 {
-            previous_hash =
-                sha2::Sha256::digest(Encode!(&l.get(l.len() - 1).unwrap()).unwrap()).into();
-        }
         let hash_tree = ic_certified_map::labeled(b"certified_blocks", tree.as_hash_tree());
         let mut serializer = serde_cbor::ser::Serializer::new(vec![]);
         serializer.self_describe().unwrap();
@@ -342,7 +352,8 @@ fn is_authorized_admin() -> Result<(), String> {
 
 #[ic_cdk_macros::post_upgrade]
 fn post_upgrade() {
-    let tree = DATA.with(|d| build_tree(&d.borrow().get().0));
+    let previous_hash = get_previous_hash();
+    let tree = DATA.with(|d| build_tree(&d.borrow().get().0, &previous_hash));
     set_certificate(&tree.root_hash());
 }
 
