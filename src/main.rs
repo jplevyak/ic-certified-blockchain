@@ -105,7 +105,7 @@ thread_local! {
             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(4))),
             StoreData::default()).unwrap());
     static PREVIOUS_HASH: RefCell<StableCell<BlobHash, Memory>> = RefCell::new(StableCell::init(
-        MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(6))),
+        MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(5))),
         <BlobHash>::default()).unwrap());
 }
 
