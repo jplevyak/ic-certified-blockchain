@@ -53,6 +53,8 @@ export function getBlockEntryIndex(block, entry) {
 }
 
 export async function verifyIcCertifiedBlockChainEntry(block, entry_index, canisterId, rootKey = IC_ROOT_KEY) {
+  let entry = block.data[entry_index];
+  let caller = block.callers[entry_index];
   entry_index = toBEBytesUint32(entry_index);
   const canisterIdPrincipal = Principal.fromText(canisterId);
   try {
@@ -75,7 +77,7 @@ export async function verifyIcCertifiedBlockChainEntry(block, entry_index, canis
     return false;
   }
   const certified_entry_hash = lookup_path(["certified_blocks", entry_index], block_tree);
-  const entry_hash = new Uint8Array(fromHex(sha256(entry)));
+  const entry_hash = new Uint8Array(fromHex(sha256(sha256(caller) + sha256(entry))));
   if (!isBufferEqual(new Uint8Array(certified_entry_hash), entry_hash)) {
     console.log('Certified block entry hash does not match block entry hash');
     return false;
@@ -110,6 +112,7 @@ export function printBlock(block) {
   console.log('certificate signature', toHash(block_certificate.signature));
   console.log('block tree', hashTreeToString(block.tree));
   console.log('data', block.data.map((x) => toHex(x)));
+  console.log('callers', block.callers.map((x) => toHex(x)));
   console.log('preivous_hash', toHex(block.previousHash));
 }
 

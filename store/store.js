@@ -144,9 +144,9 @@ if (certificate.length < 1) {
   process.exit(1);
 }
 console.log('get_certificate() => certificate', toHex(certificate[0]));
-let index = await actor.append(certificate[0]);
+let index = await actor.commit(certificate[0]);
 if (index.length < 1) {
-  console.error('ERROR: append() failed');
+  console.error('ERROR: commit() failed');
   process.exit(1);
 }
 console.log('SUCCESS! new block', index[0], 'new blockchain length', await actor.length());

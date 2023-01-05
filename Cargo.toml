@@ -23,3 +23,4 @@ sha2 = "^0.10"
 debug = false
 lto = true
 opt-level = 'z'
+# rustflags = ['-C', 'target-feature=+bulk-memory']
