@@ -131,12 +131,6 @@ fn hash_pending(pending: &Pending, i: usize) -> [u8; 32] {
     hasher.update(caller_hash);
     hasher.update(data_hash);
     let hash: [u8; 32] = hasher.finalize().into();
-    ic_cdk::println!(
-        "{} {} {}",
-        hex::encode(caller_hash),
-        hex::encode(data_hash),
-        hex::encode(hash)
-    );
     hash
 }
 
