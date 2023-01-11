@@ -12,11 +12,13 @@ The blockchain is a sequence of blocks of the format:
 type Block = record {
   // Certificate is signed by the NNS root key and contains the root of tree.
   certificate: blob;
-  // Under b"certified_blocks is a map from i as u32 BE bytes to sha256(data[i])
+  // Under b"certified_blocks is a map from i as u32 BE bytes to sha256(sha256(caller{i])sha256(data[i]))
   // with an entry from "previous_hash" to previous_hash.
   tree: blob;
   // The raw data entries.
   data: vec blob;
+  // Caller of prepare()/prepare_some() for corresponding "data".
+  caller: vec principal;
   previous_hash: blob;
 };
 ```
@@ -40,7 +42,7 @@ service blockchain: (opt text) -> {
   get_certificate: () -> (opt blob) query;
   // Append the staged data with certificate and tree.  Traps if the certificate is stale.
   // Returns None if there is nothing staged.
-  append: (certificate: blob) -> (opt nat64);
+  commit: (certificate: blob) -> (opt nat64);
   // Get a certified block.
   get_block: (index: nat64) -> (Block) query;
   // Find block index with matching block hash or latest matching data entry hash.
