@@ -34,14 +34,14 @@ service blockchain: (opt text) -> {
   find: (hash: blob) -> (opt nat64) query;
   // Return the index of the first block stored.
   first: () -> (nat64) query;
-  // Return the index of the start of the primary log (length of log - first() - secondary.len()).
+  // Return the index of the start of the primary part (length of log - first() - secondary.len()).
   mid: () -> (nat64) query;
   // Return the index of the next block to be stored (the length of the log - first()).
   next: () -> (nat64) query;
   // Return hex string representing the hash of the last block or 0.
   last_hash: () -> (text) query;
-  // Rotate the log by moving the primary log to a secondary log and deleting the seconday (if any).
-  // Returns the new first index stored if the secondary log has been deleted.
+  // Rotate the log by making the primary part secondary and deleting the old seconday and making it primary.
+  // Returns the new first index stored if the secondary part had anything to delete.
   rotate: () -> (opt nat64);
   // Manage the set of Principals allowed to prepare and append (User) or authorize (Admin).
   authorize: (principal, Auth) -> ();
