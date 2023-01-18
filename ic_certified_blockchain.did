@@ -34,7 +34,9 @@ service blockchain: (opt text) -> {
   find: (hash: blob) -> (opt nat64) query;
   // Return the index of the first block stored.
   first: () -> (nat64) query;
-  // Return the index of the next block stored (the length of the log - first()).
+  // Return the index of the start of the primary log (length of log - first() - secondary.len()).
+  mid: () -> (nat64) query;
+  // Return the index of the next block to be stored (the length of the log - first()).
   next: () -> (nat64) query;
   // Return hex string representing the hash of the last block or 0.
   last_hash: () -> (text) query;

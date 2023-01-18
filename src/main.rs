@@ -341,6 +341,13 @@ fn first() -> u64 {
 
 #[ic_cdk_macros::query]
 #[candid_method]
+fn mid() -> u64 {
+    METADATA.with(|m| m.borrow().get().base_index)
+        + secondary_log().with(|l| l.borrow().len() as u64)
+}
+
+#[ic_cdk_macros::query]
+#[candid_method]
 fn next() -> u64 {
     METADATA.with(|m| m.borrow().get().base_index)
         + LOGA.with(|l| l.borrow().len() as u64)

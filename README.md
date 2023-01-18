@@ -17,8 +17,8 @@ type Block = record {
   tree: blob;
   // The raw data entries.
   data: vec blob;
-  // Caller of prepare()/prepare_some() for corresponding "data".
-  caller: vec principal;
+  // Callers of prepare()/prepare_some() for corresponding "data".
+  callers: vec principal;
   previous_hash: blob;
 };
 ```
@@ -47,10 +47,17 @@ service blockchain: (opt text) -> {
   get_block: (index: nat64) -> (Block) query;
   // Find block index with matching block hash or latest matching data entry hash.
   find: (hash: blob) -> (opt nat64) query;
-  // Return the number of blocks stored.
-  length: () -> (nat64) query;
+  // Return the index of the first block stored.
+  first: () -> (nat64) query;
+  // Return the index of the start of the primary log (length of log - first() - secondary.len()).
+  mid: () -> (nat64) query;
+  // Return the index of the next block to be stored (the length of the log - first()).
+  next: () -> (nat64) query;
   // Return hex string representing the hash of the last block or 0.
   last_hash: () -> (text) query;
+  // Rotate the log by moving the primary log to a secondary log and deleting the seconday (if any).
+  // Returns the new first index stored if the secondary log has been deleted.
+  rotate: () -> (opt nat64);
   // Manage the set of Principals allowed to prepare and append (User) or authorize (Admin).
   authorize: (principal, Auth) -> ();
   deauthorize: (principal) -> ();
@@ -76,15 +83,15 @@ The canister smart contract stores all persistent data in stable memory.  There 
 
 ### Single Writer
 
-A single writer should use `prepare()` then `get_certificate()` then `append()`.  An error in `prepare()` means that there is already a prepared block which needs `get_certificate()` then `append()`.  An error in `get_certificate()` or `append()` mean that there is no prepared block or that the certificate is stale.  The client should use `get_block()` to determine if the data has already been written and retry if not. 
+A single writer should use `prepare()` then `get_certificate()` then `append()`.  An error in `prepare()` means that there is already a prepared block which needs `get_certificate()` then `append()`.  An error in `get_certificate()` or `append()` mean that there is no prepared block or that the certificate is stale.  The client should use `get_block()` to determine if the data has already been written and retry if not.
 
 ### Multiple Writer
 
-Multiple writers can either use the single writer workflow or they can all call `prepare_some()` and then `get_certificate()` followed by `append()` recognizing that the `get_certificate()` `append()` commit sequence might fail if there is a race.  Use of `prepare_some()` may result in higher throughput.  Clients may defer or retry the commit sequence until `get_certificate()` returns None.  Note that there is no provision in this code for DOS prevention e.g. logging callers of `prepare_some()` which may be advisable in some use cases.
+Multiple writers can either use the single writer workflow or they can all call `prepare_some()` and then `get_certificate()` followed by `append()` recognizing that the `get_certificate()` `append()` commit sequence might fail if there is a race.  Use of `prepare_some()` may result in higher throughput.  Clients may defer or retry the commit sequence until `get_certificate()` returns None.  Note that there is no provision in this code for DOS prevention although callers of `prepare_some()` are recorded which may be of some use.
 
-### Backup and Remove Old Blocks
+### Log Rotation
 
-In some use cases it may be desirable to backup and remove old blocks from the canister smart contract.  A controller principal with `Admin` authoriation should remove all user permissions to prevent updates to the blockchain, `get_block` all the blocks and back them up, then deploy with `mode=reinstall` to wipe stable memory and (optionally) pass in the final block's hash (the result of `last_hash()`) as a 64-character hex value: `dfx deploy --argument '(opt "AABB...")'`.  Finally, User permissions can be restored.  Users should periodically retry if they get permission denied.
+In some use cases it may be desirable to backup and remove old blocks from the canister smart contract. Since the committed log entries are individually certitifed, they can be verified independent of the smart contract so the backup can be used as a primary source. Safe backup and clearing of old log entries is done via a process of log rotation. Internally the blockchain log is broken up into a primary part and a secondary part.  Peridically a backup agent should `get_block()` all blocks between `first()` and `mid()` (the first index beyond the secondary part) then call `rotate()` which makes the primary secondary, deletes the data in the old secondary and makes it primary. Note that log indexes are preseved (do not change) over time and that `find()` continues to work for entries in both the primary and secondary parts of the log.
 
 ## Development
 
