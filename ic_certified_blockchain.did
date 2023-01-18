@@ -6,8 +6,8 @@ type Block = record {
   tree: blob;
   // The raw data entries.
   data: vec blob;
-  // Caller of prepare()/prepare_some() for corresponding "data".
-  caller: vec principal;
+  // Callers of prepare()/prepare_some() for corresponding "data".
+  callers: vec principal;
   previous_hash: blob;
 };
 
@@ -32,10 +32,15 @@ service blockchain: (opt text) -> {
   get_block: (index: nat64) -> (Block) query;
   // Find block index with matching block hash or latest matching data entry hash.
   find: (hash: blob) -> (opt nat64) query;
-  // Return the number of blocks stored.
-  length: () -> (nat64) query;
+  // Return the index of the first block stored.
+  first: () -> (nat64) query;
+  // Return the index of the next block stored (the length of the log - first()).
+  next: () -> (nat64) query;
   // Return hex string representing the hash of the last block or 0.
   last_hash: () -> (text) query;
+  // Rotate the log by moving the primary log to a secondary log and deleting the seconday (if any).
+  // Returns the new first index stored if the secondary log has been deleted.
+  rotate: () -> (opt nat64);
   // Manage the set of Principals allowed to prepare and append (User) or authorize (Admin).
   authorize: (principal, Auth) -> ();
   deauthorize: (principal) -> ();

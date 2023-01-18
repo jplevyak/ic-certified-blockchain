@@ -132,7 +132,7 @@ let result = await actor.commit(certificate[0]);
 console.log('append block a', result);
 let index = result[0];
 
-console.log('blockchain length', await actor.length());
+console.log('blockchain length', await actor.next());
 
 let block = await actor.get_block(index);
 console.log('get block a from index', index, blockToHex(block));
@@ -186,10 +186,9 @@ assert(isBufferEqual(new Uint8Array(certified_blocka_0_hash), blocka_0_combined_
 console.log('certified_blocka_0_hash == blocka_0_combined_hash');
 
 let blockb_0 = new Uint8Array(8);
-blocka_0[7] = 2;
-
+blockb_0[7] = 2;
 let blockb = [blockb_0];
-console.log('block a', [toHex(blocka_0)]);
+console.log('block b', [toHex(blockb_0)]);
 
 console.log('prepare_some block b 0');
 certified_data = await actor.prepare_some(blockb);
@@ -211,7 +210,47 @@ result = await actor.commit(certificate[0]);
 console.log('append block b', result);
 index = result[0];
 
-console.log('blockchain length', await actor.length());
+console.log('blockchain length', await actor.next());
+
+result = await actor.rotate();
+console.log('rotate', result);
+
+console.log('blockchain first', await actor.first());
+console.log('blockchain length', await actor.next());
+
+block = await actor.get_block(index);
+console.log('get block b from index', index, blockToHex(block));
+
+let blockc_0 = new Uint8Array(8);
+blockc_0[7] = 3;
+let blockc = [blockc_0];
+console.log('block c', [toHex(blockc_0)]);
+
+console.log('prepare_some block c 1');
+certified_data = await actor.prepare_some(blockc);
+console.log('block c 1 certified data', toHex(certified_data));
+
+block = await actor.get_block(index);
+console.log('get block b from index', index, blockToHex(block));
+
+console.log('get certificate');
+certificate = await actor.get_certificate();
+console.log('block c certificate', toHex(certificate[0]));
+
+result = await actor.commit(certificate[0]);
+console.log('append block c', result);
+index = result[0];
+
+console.log('blockchain length', await actor.next());
+
+block = await actor.get_block(index);
+console.log('get block c from index', index, blockToHex(block));
+
+result = await actor.rotate();
+console.log('rotate', result);
+
+console.log('blockchain first', await actor.first());
+console.log('blockchain length', await actor.next());
 
 console.log('deauthorizing', identity.getPrincipal().toText());
 await actor.deauthorize(identity.getPrincipal());

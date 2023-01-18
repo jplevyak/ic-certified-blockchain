@@ -39,6 +39,13 @@ struct Authorization {
 }
 
 #[derive(Clone, Debug, Default, CandidType, Deserialize)]
+struct Metadata {
+    previous_hash: Hash,
+    base_index: u64,
+    b_is_primary: bool,
+}
+
+#[derive(Clone, Debug, Default, CandidType, Deserialize)]
 struct BlobHash(Hash);
 
 #[derive(Clone, Debug, Default, CandidType, Deserialize)]
@@ -84,35 +91,58 @@ impl Storable for Pending {
     }
 }
 
+impl Storable for Metadata {
+    fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
+        Cow::Owned(Encode!(self).unwrap())
+    }
+
+    fn from_bytes(bytes: Vec<u8>) -> Self {
+        Decode!(&bytes, Self).unwrap()
+    }
+}
+
 thread_local! {
-    static MEMORY_MANAGER: RefCell<MemoryManager<DefaultMemoryImpl>> =
-        RefCell::new(MemoryManager::init(DefaultMemoryImpl::default()));
-    static LOG: RefCell<Log<Memory, Memory>> = RefCell::new(
-        Log::init(
-            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(0))),
-            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(1))),
-        ).unwrap()
-    );
-    static MAP: RefCell<StableBTreeMap<Memory, BlobHash, u64>> = RefCell::new(
-        StableBTreeMap::init_with_sizes(
-            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(2))),
-            MAX_KEY_SIZE,
-            MAX_VALUE_SIZE
-        )
-    );
-    static AUTH: RefCell<StableBTreeMap<Memory, Blob, u32>> = RefCell::new(
-        StableBTreeMap::init_with_sizes(
-            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(3))),
-            MAX_KEY_SIZE,
-            4
-        )
-    );
-    static PENDING: RefCell<StableCell<Pending, Memory>> = RefCell::new(StableCell::init(
-            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(4))),
-            Pending::default()).unwrap());
-    static PREVIOUS_HASH: RefCell<StableCell<BlobHash, Memory>> = RefCell::new(StableCell::init(
+static MEMORY_MANAGER: RefCell<MemoryManager<DefaultMemoryImpl>> =
+    RefCell::new(MemoryManager::init(DefaultMemoryImpl::default()));
+static METADATA: RefCell<StableCell<Metadata, Memory>> = RefCell::new(StableCell::init(
+        MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(0))),
+        <Metadata>::default()).unwrap());
+static LOGA: RefCell<Log<Memory, Memory>> = RefCell::new(
+    Log::init(
+        MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(1))),
+        MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(2))),
+    ).unwrap()
+);
+static LOGB: RefCell<Log<Memory, Memory>> = RefCell::new(
+    Log::init(
+        MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(3))),
+        MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(4))),
+    ).unwrap()
+);
+static MAPA: RefCell<StableBTreeMap<Memory, BlobHash, u64>> = RefCell::new(
+    StableBTreeMap::init_with_sizes(
         MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(5))),
-        <BlobHash>::default()).unwrap());
+        MAX_KEY_SIZE,
+        MAX_VALUE_SIZE
+    )
+);
+static MAPB: RefCell<StableBTreeMap<Memory, BlobHash, u64>> = RefCell::new(
+    StableBTreeMap::init_with_sizes(
+        MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(6))),
+        MAX_KEY_SIZE,
+        MAX_VALUE_SIZE
+    )
+);
+static PENDING: RefCell<StableCell<Pending, Memory>> = RefCell::new(StableCell::init(
+        MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(7))),
+        Pending::default()).unwrap());
+static AUTH: RefCell<StableBTreeMap<Memory, Blob, u32>> = RefCell::new(
+    StableBTreeMap::init_with_sizes(
+        MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(8))),
+        MAX_KEY_SIZE,
+        4
+        )
+    );
 }
 
 #[ic_cdk_macros::update(guard = "is_authorized_user")]
@@ -185,8 +215,8 @@ fn get_certificate() -> Option<Blob> {
 }
 
 fn get_previous_hash() -> Hash {
-    let mut previous_hash = PREVIOUS_HASH.with(|h| h.borrow().get().0.clone());
-    LOG.with(|l| {
+    let mut previous_hash = METADATA.with(|h| h.borrow().get().previous_hash.clone());
+    primary_log().with(|l| {
         let l = l.borrow();
         if l.len() > 0 {
             previous_hash =
@@ -194,6 +224,30 @@ fn get_previous_hash() -> Hash {
         }
     });
     previous_hash
+}
+
+fn primary_map() -> &'static std::thread::LocalKey<RefCell<StableBTreeMap<Memory, BlobHash, u64>>> {
+    if METADATA.with(|m| m.borrow().get().b_is_primary) {
+        &MAPB
+    } else {
+        &MAPA
+    }
+}
+
+fn primary_log() -> &'static std::thread::LocalKey<RefCell<Log<Memory, Memory>>> {
+    if METADATA.with(|m| m.borrow().get().b_is_primary) {
+        &LOGB
+    } else {
+        &LOGA
+    }
+}
+
+fn secondary_log() -> &'static std::thread::LocalKey<RefCell<Log<Memory, Memory>>> {
+    if METADATA.with(|m| m.borrow().get().b_is_primary) {
+        &LOGA
+    } else {
+        &LOGB
+    }
 }
 
 #[ic_cdk_macros::update(guard = "is_authorized_user")]
@@ -221,8 +275,8 @@ fn commit(certificate: Blob) -> Option<u64> {
     } else {
         ic_cdk::trap("certificate mismatch");
     }
-    let index = LOG.with(|l| l.borrow().len());
-    MAP.with(|m| {
+    let index = next();
+    primary_map().with(|m| {
         let mut m = m.borrow_mut();
         for (_, h) in tree.iter() {
             m.insert(BlobHash(*h), index as u64).unwrap();
@@ -232,7 +286,7 @@ fn commit(certificate: Blob) -> Option<u64> {
             m.insert(BlobHash(hash), index as u64).unwrap();
         }
     });
-    LOG.with(|l| {
+    primary_log().with(|l| {
         let l = l.borrow_mut();
         let hash_tree = ic_certified_map::labeled(b"certified_blocks", tree.as_hash_tree());
         let mut serializer = serde_cbor::ser::Serializer::new(vec![]);
@@ -247,32 +301,64 @@ fn commit(certificate: Blob) -> Option<u64> {
         };
         let encoded_block = Encode!(&block).unwrap();
         l.append(&encoded_block).unwrap();
-        Some(l.len() as u64 - 1)
-    })
+    });
+    Some(next() - 1)
 }
 
 #[ic_cdk_macros::query]
 #[candid_method]
 fn get_block(index: u64) -> Block {
-    LOG.with(|m| candid::decode_one(&m.borrow().get(index as usize).unwrap()).unwrap())
+    if index < first() {
+        ic_cdk::trap("index before first()");
+    }
+    let index = index - first();
+    let secondary_len = secondary_log().with(|l| l.borrow().len() as u64);
+    if index < secondary_len {
+        secondary_log()
+            .with(|l| candid::decode_one(&l.borrow().get(index as usize).unwrap()).unwrap())
+    } else {
+        let index = index - secondary_len;
+        primary_log()
+            .with(|l| candid::decode_one(&l.borrow().get(index as usize).unwrap()).unwrap())
+    }
 }
 
 #[ic_cdk_macros::query]
 #[candid_method]
 fn find(hash: Hash) -> Option<u64> {
-    MAP.with(|m| m.borrow().get(&BlobHash(hash)))
+    if let Some(index) = MAPA.with(|m| m.borrow().get(&BlobHash(hash))) {
+        Some(index)
+    } else {
+        MAPB.with(|m| m.borrow().get(&BlobHash(hash)))
+    }
 }
 
 #[ic_cdk_macros::query]
 #[candid_method]
-fn length() -> u64 {
-    LOG.with(|l| l.borrow().len() as u64)
+fn first() -> u64 {
+    METADATA.with(|m| m.borrow().get().base_index)
+}
+
+#[ic_cdk_macros::query]
+#[candid_method]
+fn next() -> u64 {
+    METADATA.with(|m| m.borrow().get().base_index)
+        + LOGA.with(|l| l.borrow().len() as u64)
+        + LOGB.with(|l| l.borrow().len() as u64)
 }
 
 #[ic_cdk_macros::query]
 #[candid_method]
 fn last_hash() -> String {
-    LOG.with(|l| {
+    if primary_log().with(|l| l.borrow().len()) != 0 {
+        log_hash(primary_log())
+    } else {
+        log_hash(secondary_log())
+    }
+}
+
+fn log_hash(log: &'static std::thread::LocalKey<RefCell<Log<Memory, Memory>>>) -> String {
+    log.with(|l| {
         let l = l.borrow();
         if l.len() == 0 {
             return "0000000000000000000000000000000000000000000000000000000000000000".to_string();
@@ -283,6 +369,51 @@ fn last_hash() -> String {
     })
 }
 
+#[ic_cdk_macros::update(guard = "is_authorized_user")]
+#[candid_method]
+fn rotate() -> Option<u64> {
+    let mut metadata = METADATA.with(|m| m.borrow().get().clone());
+    let old_base_index = metadata.base_index;
+    LOGA.with(|loga| {
+        LOGB.with(|logb| {
+            MAPA.with(|mapa| {
+                MAPB.with(|mapb| {
+                    if !metadata.b_is_primary {
+                        metadata.base_index += logb.borrow().len() as u64;
+                        logb.replace(Log::new(
+                            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(3))),
+                            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(4))),
+                        ));
+                        mapb.replace(StableBTreeMap::new_with_sizes(
+                            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(6))),
+                            MAX_KEY_SIZE,
+                            MAX_VALUE_SIZE,
+                        ));
+                    } else {
+                        metadata.base_index += loga.borrow().len() as u64;
+                        loga.replace(Log::new(
+                            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(1))),
+                            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(2))),
+                        ));
+                        mapa.replace(StableBTreeMap::new_with_sizes(
+                            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(5))),
+                            MAX_KEY_SIZE,
+                            MAX_VALUE_SIZE,
+                        ));
+                    }
+                });
+            });
+        });
+    });
+    metadata.b_is_primary = !metadata.b_is_primary;
+    METADATA.with(|m| m.borrow_mut().set(metadata.clone()).unwrap());
+    if metadata.base_index != old_base_index {
+        Some(metadata.base_index)
+    } else {
+        None
+    }
+}
+
 #[ic_cdk_macros::init]
 fn canister_init(previous_hash: Option<String>) {
     authorize_principal(&ic_cdk::caller(), Auth::Admin);
@@ -290,10 +421,10 @@ fn canister_init(previous_hash: Option<String>) {
         let _x = hex::decode(&previous_hash).unwrap();
         if let Ok(previous_hash) = hex::decode(&previous_hash) {
             if previous_hash.len() == 32 {
-                PREVIOUS_HASH.with(|h| {
-                    h.borrow_mut()
-                        .set(BlobHash(previous_hash.try_into().unwrap()))
-                        .unwrap();
+                METADATA.with(|m| {
+                    let mut metadata = m.borrow().get().clone();
+                    metadata.previous_hash = previous_hash.as_slice().try_into().unwrap();
+                    m.borrow_mut().set(metadata).unwrap();
                 });
                 return;
             }
