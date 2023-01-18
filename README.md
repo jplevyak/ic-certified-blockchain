@@ -55,7 +55,7 @@ service blockchain: (opt text) -> {
   next: () -> (nat64) query;
   // Return hex string representing the hash of the last block or 0.
   last_hash: () -> (text) query;
-  // Rotate the log by making the primary part secondary and deleting the old seconday and making it primary.
+  // Rotate the log by making the primary part secondary and deleting the old secondary and making it primary.
   // Returns the new first index stored if the secondary part had anything to delete.
   rotate: () -> (opt nat64);
   // Manage the set of Principals allowed to prepare and append (User) or authorize (Admin).
@@ -77,7 +77,7 @@ A block is an array of byte arrays (entries).  First the block is staged by call
 
 ## Blockchain Persistence
 
-The canister smart contract stores all persistent data in stable memory.  There is no provision for deleting or rewriting blocks short of reinstalling or deleting the canister.  However, because the blocks are certified, they can be backed up remotely and validated offline.  The blocks can even be transfered to a different canister smart contract by re-storing the blocks and substituting the original certificate during the `append()` phase.
+The canister smart contract stores all persistent data in stable memory.  There is no provision for deleting or rewriting blocks short of reinstalling or deleting the canister.  However, because the blocks are certified, they can be backed up remotely and validated offline.  The blocks can even be transferred to a different canister smart contract by re-storing the blocks and substituting the original certificate during the `append()` phase.
 
 ## Usage
 
@@ -91,15 +91,15 @@ Multiple writers can either use the single writer workflow or they can all call 
 
 ### Log Rotation
 
-In some use cases it may be desirable to backup and remove old blocks from the canister smart contract. Since the committed log entries are individually certitifed, they can be verified independent of the smart contract so the backup can be used as a primary source. Safe backup and clearing of old log entries is done via a process of log rotation. Internally the blockchain log is broken up into a primary part and a secondary part.  Peridically a backup agent should `get_block()` all blocks between `first()` and `mid()` (the first index beyond the secondary part) then call `rotate()` which makes the primary secondary, deletes the data in the old secondary and makes it primary. Note that log indexes are preseved (do not change) over time and that `find()` continues to work for entries in both the primary and secondary parts of the log.
+In some use cases it may be desirable to backup and remove old blocks from the canister smart contract. Since the committed log entries are individually certified, they can be verified independent of the smart contract so the backup can be used as a primary source. Safe backup and clearing of old log entries is done via a process of log rotation. Internally the blockchain log is broken up into a primary part and a secondary part.  Periodically a backup agent should `get_block()` all blocks between `first()` and `mid()` (the first index beyond the secondary part) then call `rotate()` which makes the primary secondary, deletes the data in the old secondary and makes it primary. Note that log indexes are preserved (do not change) over time and that `find()` continues to work for entries in both the primary and secondary parts of the log.
 
 ## Development
 
-### Depenedencies
+### Dependencies
 
 * node, npm
 * rustup, cargo, rustc with wasm
-* hash\_tree.rs is copied from github.com/dfinity/agent-rssrc/hash\_tree/mod.rs
+* hash\_tree.rs is copied from github.com/dfinity/agent-rs/src/hash\_tree/mod.rs
 
 ### Setup
 
