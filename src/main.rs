@@ -205,7 +205,7 @@ fn set_certificate(root_hash: &Hash) -> Blob {
 }
 
 #[ic_cdk_macros::query]
-#[candid_method]
+#[candid_method(query)]
 fn get_certificate() -> Option<Blob> {
     if PENDING.with(|p| p.borrow().get().data.len()) == 0 {
         None
@@ -306,7 +306,7 @@ fn commit(certificate: Blob) -> Option<u64> {
 }
 
 #[ic_cdk_macros::query]
-#[candid_method]
+#[candid_method(query)]
 fn get_block(index: u64) -> Block {
     if index < first() {
         ic_cdk::trap("index before first()");
@@ -324,7 +324,7 @@ fn get_block(index: u64) -> Block {
 }
 
 #[ic_cdk_macros::query]
-#[candid_method]
+#[candid_method(query)]
 fn find(hash: Hash) -> Option<u64> {
     if let Some(index) = MAPA.with(|m| m.borrow().get(&BlobHash(hash))) {
         Some(index)
@@ -334,20 +334,20 @@ fn find(hash: Hash) -> Option<u64> {
 }
 
 #[ic_cdk_macros::query]
-#[candid_method]
+#[candid_method(query)]
 fn first() -> u64 {
     METADATA.with(|m| m.borrow().get().base_index)
 }
 
 #[ic_cdk_macros::query]
-#[candid_method]
+#[candid_method(query)]
 fn mid() -> u64 {
     METADATA.with(|m| m.borrow().get().base_index)
         + secondary_log().with(|l| l.borrow().len() as u64)
 }
 
 #[ic_cdk_macros::query]
-#[candid_method]
+#[candid_method(query)]
 fn next() -> u64 {
     METADATA.with(|m| m.borrow().get().base_index)
         + LOGA.with(|l| l.borrow().len() as u64)
@@ -355,7 +355,7 @@ fn next() -> u64 {
 }
 
 #[ic_cdk_macros::query]
-#[candid_method]
+#[candid_method(query)]
 fn last_hash() -> String {
     if primary_log().with(|l| l.borrow().len()) != 0 {
         log_hash(primary_log())
@@ -441,7 +441,7 @@ fn canister_init(previous_hash: Option<String>) {
 }
 
 #[ic_cdk_macros::query]
-#[candid_method]
+#[candid_method(query)]
 fn get_authorized() -> Vec<Authorization> {
     let mut authorized = Vec::<Authorization>::new();
     AUTH.with(|a| {
