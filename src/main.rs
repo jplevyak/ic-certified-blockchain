@@ -12,7 +12,6 @@ use serde::Serialize;
 use sha2::Digest;
 use std::convert::TryInto;
 use std::fmt::Debug;
-use std::str::FromStr;
 use std::{borrow::Cow, cell::RefCell, time::Duration};
 #[macro_use]
 extern crate num_derive;
