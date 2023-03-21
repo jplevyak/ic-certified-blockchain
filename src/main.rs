@@ -27,8 +27,7 @@ type Callers = Vec<Principal>;
 
 const MAX_KEY_SIZE: u32 = 32;
 const MAX_VALUE_SIZE: u32 = 8;
-// const UPDATE_PERMISSIONS_EVERY_SECS: u64 = 3600;  // 1 hour
-const UPDATE_PERMISSIONS_EVERY_SECS: u64 = 3;  // 1 hour
+const UPDATE_PERMISSIONS_EVERY_SECS: u64 = 3600;  // 1 hour
 
 #[derive(Clone, Debug, CandidType, Deserialize, FromPrimitive)]
 enum Auth {
@@ -461,8 +460,7 @@ pub fn make_get_value_request(
 }
 
 async fn update_permissions_from_registry() {
-    //let registry_canister = Principal::from_slice(&vec![0]);
-    let registry_canister = Principal::from_str("rwlgt-iiaaa-aaaaa-aaaaa-cai").unwrap();
+    let registry_canister = Principal::from_slice(&vec![0]);
     let subnets = ic_cdk::api::call::call_raw(registry_canister, "get_value", &make_get_value_request("subnet_list"), 0).await.unwrap();
     let subnets = RegistryGetValueResponse::decode(subnets.as_slice()).unwrap();
     let subnets = SubnetListRecord::decode(subnets.value.as_slice()).unwrap();
