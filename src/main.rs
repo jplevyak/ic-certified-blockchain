@@ -7,11 +7,12 @@ use ic_stable_structures::{
     cell::Cell as StableCell, log::Log, DefaultMemoryImpl, StableBTreeMap, Storable,
 };
 use num::FromPrimitive;
+use prost::Message;
 use serde::Serialize;
 use sha2::Digest;
 use std::convert::TryInto;
 use std::fmt::Debug;
-use std::{borrow::Cow, cell::RefCell};
+use std::{borrow::Cow, cell::RefCell, time::Duration};
 #[macro_use]
 extern crate num_derive;
 
@@ -25,6 +26,7 @@ type Callers = Vec<Principal>;
 
 const MAX_KEY_SIZE: u32 = 32;
 const MAX_VALUE_SIZE: u32 = 8;
+const UPDATE_PERMISSIONS_EVERY_SECS: u64 = 3600;  // 1 hour
 
 #[derive(Clone, Debug, CandidType, Deserialize, FromPrimitive)]
 enum Auth {
@@ -421,6 +423,63 @@ fn rotate() -> Option<u64> {
     }
 }
 
+#[derive(Deserialize, PartialEq, Message)]
+struct SubnetListRecord {
+    #[prost(bytes = "vec", repeated, tag = "2")]
+    pub subnets: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
+}
+
+#[derive(Deserialize, Message)]
+struct SubnetRecord {
+    #[prost(bytes = "vec", repeated, tag = "3")]
+    pub membership: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct RegistryGetValueRequest {
+    #[prost(message, optional, tag = "1")]
+    pub version: ::core::option::Option<u64>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub key: ::prost::alloc::vec::Vec<u8>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct RegistryGetValueResponse {
+    #[prost(bytes = "vec", tag = "3")]
+    pub value: ::prost::alloc::vec::Vec<u8>,
+}
+
+pub fn make_get_value_request(
+    key: &str,
+) -> Vec<u8> {
+    let request = RegistryGetValueRequest { key: key.as_bytes().to_vec(), version: None };
+    let mut buf = Vec::new();
+    request.encode(&mut buf).unwrap();
+    buf
+}
+
+async fn update_permissions_from_registry() {
+    let registry_canister = Principal::from_slice(&vec![0]);
+    let subnets = ic_cdk::api::call::call_raw(registry_canister, "get_value", &make_get_value_request("subnet_list"), 0).await.unwrap();
+    let subnets = RegistryGetValueResponse::decode(subnets.as_slice()).unwrap();
+    let subnets = SubnetListRecord::decode(subnets.value.as_slice()).unwrap();
+    let subnets : Vec<Principal> = subnets.subnets.iter()
+        .map(|subnet_id_vec| Principal::from_slice(subnet_id_vec))
+        .collect();
+    for s in subnets {
+		let members = ic_cdk::api::call::call_raw(registry_canister, "get_value", &make_get_value_request(&format!("subnet_record_{}", s)), 0).await.unwrap();
+		let members = RegistryGetValueResponse::decode(members.as_slice()).unwrap();
+		let members = SubnetRecord::decode(members.value.as_slice()).unwrap();
+        for node in members.membership {
+            authorize_principal(&Principal::from_slice(node.as_slice()), Auth::User);
+        }
+    }
+}
+
+fn start_tasks() {
+    ic_cdk_timers::set_timer_interval(Duration::from_secs(UPDATE_PERMISSIONS_EVERY_SECS), || ic_cdk::spawn(update_permissions_from_registry()));
+}
+
 #[ic_cdk_macros::init]
 fn canister_init(previous_hash: Option<String>) {
     authorize_principal(&ic_cdk::caller(), Auth::Admin);
@@ -438,6 +497,7 @@ fn canister_init(previous_hash: Option<String>) {
         }
         ic_cdk::trap("previous must be a 64 hex string");
     }
+    start_tasks();
 }
 
 #[ic_cdk_macros::query]
@@ -518,6 +578,7 @@ fn post_upgrade() {
     let previous_hash = get_previous_hash();
     let tree = PENDING.with(|p| build_tree(&p.borrow().get(), &previous_hash));
     set_certificate(&tree.root_hash());
+    start_tasks();
 }
 
 ic_cdk::export::candid::export_service!();
