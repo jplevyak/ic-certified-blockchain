@@ -16,6 +16,10 @@
     "staging": {
       "providers": [ "https://ic0.app" ],
       "type": "persistent"
+    },
+    "testnet": {
+      "providers": ["http://[2602:fb2b:100:10:5000:1fff:fefb:ac01]:8080"],  
+      "type": "ephemeral"
     }
   },
   "version": 1
