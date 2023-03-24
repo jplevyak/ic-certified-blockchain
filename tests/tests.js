@@ -4,11 +4,11 @@ import crypto from 'crypto';
 import sha256 from "sha256";
 import { lebDecode, PipeArrayBuffer } from "@dfinity/candid";
 import { Principal } from '@dfinity/principal';
-import { Secp256k1PublicKey, Secp256k1KeyIdentity } from '@dfinity/identity';
+import Secp256k1KeyIdentity from '@dfinity/identity-secp256k1';
 import { Actor, Cbor, Certificate, HttpAgent, lookup_path, reconstruct, hashTreeToString } from '@dfinity/agent';
-import { idlFactory } from '../src/declarations/ic-certified-blockchain/ic-certified-blockchain.did.js';
 import exec from 'await-exec';
 import assert from 'assert';
+import { idlFactory } from '../src/declarations/ic-certified-blockchain/ic-certified-blockchain.did.js'; // Note: currently unrecognized
 
 function toHex(buffer) { // buffer is an ArrayBuffer
 	return [...new Uint8Array(buffer)]

@@ -13,6 +13,8 @@ use sha2::Digest;
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::{borrow::Cow, cell::RefCell, time::Duration};
+use std::str::FromStr;
+
 #[macro_use]
 extern crate num_derive;
 
@@ -459,7 +461,7 @@ pub fn make_get_value_request(
 }
 
 async fn update_permissions_from_registry() {
-    let registry_canister = Principal::from_slice(&vec![0]);
+    let registry_canister = Principal::from_str("rwlgt-iiaaa-aaaaa-aaaaa-cai").expect("Failed to create principal");
     let subnets = ic_cdk::api::call::call_raw(registry_canister, "get_value", &make_get_value_request("subnet_list"), 0).await.unwrap();
     let subnets = RegistryGetValueResponse::decode(subnets.as_slice()).unwrap();
     let subnets = SubnetListRecord::decode(subnets.value.as_slice()).unwrap();
@@ -542,19 +544,15 @@ fn authorize_principal(principal: &Principal, value: Auth) {
 }
 
 fn is_authorized_user() -> Result<(), String> {
-    // temporarily skipping auth for testing
-    Ok(())
-    // AUTH.with(|a| {
-    //     if a.borrow()
-    //         .contains_key(&ic_cdk::caller().as_slice().to_vec())
-    //     {
-    //         Ok(())
-    //     } else {
-    //         let err = format!("is_authorized_user(): You are not authorized.  Caller is {:?}", &ic_cdk::caller()).to_string();
-    //         Err(err)
-    //         //Err("is_authorized_user(): You are not authorized.  Caller is {:?"}.to_string())
-    //     }
-    // })
+      AUTH.with(|a| {
+         if a.borrow()
+             .contains_key(&ic_cdk::caller().as_slice().to_vec())
+         {
+             Ok(())
+         } else {
+             Err(format!("is_authorized_user(): You are not authorized."))
+         }
+     })
 }
 
 fn is_authorized_admin() -> Result<(), String> {
@@ -566,9 +564,7 @@ fn is_authorized_admin() -> Result<(), String> {
                 Err("is_authorized_admin(): You are not authorized as Admin".to_string())
             }
         } else {
-            let err = format!("is_authorized_admin(): You are not authorized.  Caller is {:?}", &ic_cdk::caller().as_slice().to_vec()).to_string();
-            Err(err)
-            //Err("is_authorized_admin(): You are not authorized".to_string())
+            Err("is_authorized_admin(): You are not authorized".to_string())
         }
     })
 }
