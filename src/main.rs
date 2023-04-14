@@ -148,14 +148,6 @@ static AUTH: RefCell<StableBTreeMap<StorableBlob<29>, u32, Memory>> = RefCell::n
         )
     );
 }
-// static AUTH: RefCell<StableBTreeMap<[u8: 29], u32, Memory>> = RefCell::new(
-//     StableBTreeMap::init_with_sizes(
-//         MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(8))),
-//         MAX_KEY_SIZE,
-//         4
-//         )
-//     );
-// }
 
 #[ic_cdk_macros::update(guard = "is_authorized_user")]
 #[candid_method]
@@ -543,27 +535,24 @@ fn authorize_principal(principal: &Principal, value: Auth) {
     AUTH.with(|a| {
         a.borrow_mut()
             .insert(StorableBlob::from_bytes(principal.as_slice().into()), value as u32)
-            //.insert(principal.as_slice().to_vec(), value as u32)
             .unwrap();
     });
 }
 
 fn is_authorized_user() -> Result<(), String> {
-    Ok(())
-    //   AUTH.with(|a| {
-    //      if a.borrow()
-    //          .contains_key(&ic_cdk::caller().as_slice().to_vec())
-    //      {
-    //          Ok(())
-    //      } else {
-    //          Err(format!("is_authorized_user(): You are not authorized."))
-    //      }
-    //  })
+      AUTH.with(|a| {
+         if a.borrow()
+             .contains_key(&ic_cdk::caller().as_slice().to_vec())
+         {
+             Ok(())
+         } else {
+             Err(format!("is_authorized_user(): You are not authorized."))
+         }
+     })
 }
 
 fn is_authorized_admin() -> Result<(), String> {
     AUTH.with(|a| {
-        //if let Some(value) = a.borrow().get(&ic_cdk::caller().as_slice()) {
         if let Some(value) = a.borrow().get(&StorableBlob::from_bytes(ic_cdk::caller().as_slice().into())) {
             if value >= Auth::Admin as u32 {
                 Ok(())
