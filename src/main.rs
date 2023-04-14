@@ -5,6 +5,7 @@ use ic_certified_map::{AsHashTree, Hash, RbTree};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
 use ic_stable_structures::{
     cell::Cell as StableCell, log::Log, DefaultMemoryImpl, StableBTreeMap, Storable,
+    BoundedStorable, storable::Blob as StorableBlob,
 };
 use num::FromPrimitive;
 use prost::Message;
@@ -26,8 +27,6 @@ type Data = Vec<Blob>;
 type BlockTree = RbTree<Blob, Hash>;
 type Callers = Vec<Principal>;
 
-const MAX_KEY_SIZE: u32 = 32;
-const MAX_VALUE_SIZE: u32 = 8;
 const UPDATE_PERMISSIONS_EVERY_SECS: u64 = 3600;  // 1 hour
 
 #[derive(Clone, Debug, CandidType, Deserialize, FromPrimitive)]
@@ -49,7 +48,7 @@ struct Metadata {
     b_is_primary: bool,
 }
 
-#[derive(Clone, Debug, Default, CandidType, Deserialize)]
+#[derive(Clone, Debug, Default, CandidType, Deserialize, Ord, PartialEq, PartialOrd, Eq)]
 struct BlobHash(Hash);
 
 #[derive(Clone, Debug, Default, CandidType, Deserialize)]
@@ -79,10 +78,16 @@ impl Storable for BlobHash {
         Cow::Owned(self.0.to_vec())
     }
 
-    fn from_bytes(bytes: Vec<u8>) -> Self {
-        let hash: [u8; 32] = bytes.try_into().unwrap();
+    fn from_bytes(bytes: Cow<'_, [u8]>) -> Self {
+        let mut hash = [0; 32];
+        hash[..32].copy_from_slice(&bytes[..32]);
         BlobHash(hash)
     }
+}
+
+impl BoundedStorable for BlobHash {
+    const MAX_SIZE: u32 = 32;
+    const IS_FIXED_SIZE: bool = false;
 }
 
 impl Storable for Pending {
@@ -90,7 +95,7 @@ impl Storable for Pending {
         Cow::Owned(Encode!(self).unwrap())
     }
 
-    fn from_bytes(bytes: Vec<u8>) -> Self {
+    fn from_bytes(bytes: Cow<'_, [u8]>) -> Self {
         Decode!(&bytes, Self).unwrap()
     }
 }
@@ -100,7 +105,7 @@ impl Storable for Metadata {
         Cow::Owned(Encode!(self).unwrap())
     }
 
-    fn from_bytes(bytes: Vec<u8>) -> Self {
+    fn from_bytes(bytes: Cow<'_, [u8]>) -> Self {
         Decode!(&bytes, Self).unwrap()
     }
 }
@@ -111,43 +116,46 @@ static MEMORY_MANAGER: RefCell<MemoryManager<DefaultMemoryImpl>> =
 static METADATA: RefCell<StableCell<Metadata, Memory>> = RefCell::new(StableCell::init(
         MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(0))),
         <Metadata>::default()).unwrap());
-static LOGA: RefCell<Log<Memory, Memory>> = RefCell::new(
+static LOGA: RefCell<Log<Vec<u8>, Memory, Memory>> = RefCell::new(
     Log::init(
         MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(1))),
         MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(2))),
     ).unwrap()
 );
-static LOGB: RefCell<Log<Memory, Memory>> = RefCell::new(
+static LOGB: RefCell<Log<Vec<u8>, Memory, Memory>> = RefCell::new(
     Log::init(
         MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(3))),
         MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(4))),
     ).unwrap()
 );
-static MAPA: RefCell<StableBTreeMap<Memory, BlobHash, u64>> = RefCell::new(
-    StableBTreeMap::init_with_sizes(
+static MAPA: RefCell<StableBTreeMap<BlobHash, u64, Memory>> = RefCell::new(
+    StableBTreeMap::init(
         MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(5))),
-        MAX_KEY_SIZE,
-        MAX_VALUE_SIZE
     )
 );
-static MAPB: RefCell<StableBTreeMap<Memory, BlobHash, u64>> = RefCell::new(
-    StableBTreeMap::init_with_sizes(
+static MAPB: RefCell<StableBTreeMap<BlobHash, u64, Memory>> = RefCell::new(
+    StableBTreeMap::init(
         MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(6))),
-        MAX_KEY_SIZE,
-        MAX_VALUE_SIZE
     )
 );
 static PENDING: RefCell<StableCell<Pending, Memory>> = RefCell::new(StableCell::init(
         MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(7))),
         Pending::default()).unwrap());
-static AUTH: RefCell<StableBTreeMap<Memory, Blob, u32>> = RefCell::new(
-    StableBTreeMap::init_with_sizes(
+
+static AUTH: RefCell<StableBTreeMap<StorableBlob<29>, u32, Memory>> = RefCell::new(
+    StableBTreeMap::init(
         MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(8))),
-        MAX_KEY_SIZE,
-        4
         )
     );
 }
+// static AUTH: RefCell<StableBTreeMap<[u8: 29], u32, Memory>> = RefCell::new(
+//     StableBTreeMap::init_with_sizes(
+//         MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(8))),
+//         MAX_KEY_SIZE,
+//         4
+//         )
+//     );
+// }
 
 #[ic_cdk_macros::update(guard = "is_authorized_user")]
 #[candid_method]
@@ -230,7 +238,7 @@ fn get_previous_hash() -> Hash {
     previous_hash
 }
 
-fn primary_map() -> &'static std::thread::LocalKey<RefCell<StableBTreeMap<Memory, BlobHash, u64>>> {
+fn primary_map() -> &'static std::thread::LocalKey<RefCell<StableBTreeMap<BlobHash, u64, Memory>>> {
     if METADATA.with(|m| m.borrow().get().b_is_primary) {
         &MAPB
     } else {
@@ -238,7 +246,7 @@ fn primary_map() -> &'static std::thread::LocalKey<RefCell<StableBTreeMap<Memory
     }
 }
 
-fn primary_log() -> &'static std::thread::LocalKey<RefCell<Log<Memory, Memory>>> {
+fn primary_log() -> &'static std::thread::LocalKey<RefCell<Log<Vec<u8>, Memory, Memory>>> {
     if METADATA.with(|m| m.borrow().get().b_is_primary) {
         &LOGB
     } else {
@@ -246,7 +254,7 @@ fn primary_log() -> &'static std::thread::LocalKey<RefCell<Log<Memory, Memory>>>
     }
 }
 
-fn secondary_log() -> &'static std::thread::LocalKey<RefCell<Log<Memory, Memory>>> {
+fn secondary_log() -> &'static std::thread::LocalKey<RefCell<Log<Vec<u8>, Memory, Memory>>> {
     if METADATA.with(|m| m.borrow().get().b_is_primary) {
         &LOGA
     } else {
@@ -319,11 +327,11 @@ fn get_block(index: u64) -> Block {
     let secondary_len = secondary_log().with(|l| l.borrow().len() as u64);
     if index < secondary_len {
         secondary_log()
-            .with(|l| candid::decode_one(&l.borrow().get(index as usize).unwrap()).unwrap())
+            .with(|l| candid::decode_one(&l.borrow().get((index as usize).try_into().unwrap()).unwrap()).unwrap())
     } else {
         let index = index - secondary_len;
         primary_log()
-            .with(|l| candid::decode_one(&l.borrow().get(index as usize).unwrap()).unwrap())
+            .with(|l| candid::decode_one(&l.borrow().get((index as usize).try_into().unwrap()).unwrap()).unwrap())
     }
 }
 
@@ -368,7 +376,7 @@ fn last_hash() -> String {
     }
 }
 
-fn log_hash(log: &'static std::thread::LocalKey<RefCell<Log<Memory, Memory>>>) -> String {
+fn log_hash(log: &'static std::thread::LocalKey<RefCell<Log<Vec<u8>, Memory, Memory>>>) -> String {
     log.with(|l| {
         let l = l.borrow();
         if l.len() == 0 {
@@ -395,10 +403,8 @@ fn rotate() -> Option<u64> {
                             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(3))),
                             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(4))),
                         ));
-                        mapb.replace(StableBTreeMap::new_with_sizes(
+                        mapb.replace(StableBTreeMap::new(
                             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(6))),
-                            MAX_KEY_SIZE,
-                            MAX_VALUE_SIZE,
                         ));
                     } else {
                         metadata.base_index += loga.borrow().len() as u64;
@@ -406,10 +412,8 @@ fn rotate() -> Option<u64> {
                             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(1))),
                             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(2))),
                         ));
-                        mapa.replace(StableBTreeMap::new_with_sizes(
+                        mapa.replace(StableBTreeMap::new(
                             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(5))),
-                            MAX_KEY_SIZE,
-                            MAX_VALUE_SIZE,
                         ));
                     }
                 });
@@ -510,7 +514,7 @@ fn get_authorized() -> Vec<Authorization> {
         for (k, v) in a.borrow().iter() {
             if let Some(auth) = Auth::from_i32(v as i32) {
                 authorized.push(Authorization {
-                    id: Principal::from_slice(&k),
+                    id: Principal::from_slice(&k.to_bytes()),
                     auth,
                 });
             }
@@ -530,7 +534,7 @@ fn authorize(principal: Principal, value: Auth) {
 fn deauthorize(principal: Principal) {
     AUTH.with(|a| {
         a.borrow_mut()
-            .remove(&principal.as_slice().to_vec())
+            .remove(&StorableBlob::from_bytes(principal.as_slice().into()))
             .unwrap();
     });
 }
@@ -538,26 +542,29 @@ fn deauthorize(principal: Principal) {
 fn authorize_principal(principal: &Principal, value: Auth) {
     AUTH.with(|a| {
         a.borrow_mut()
-            .insert(principal.as_slice().to_vec(), value as u32)
+            .insert(StorableBlob::from_bytes(principal.as_slice().into()), value as u32)
+            //.insert(principal.as_slice().to_vec(), value as u32)
             .unwrap();
     });
 }
 
 fn is_authorized_user() -> Result<(), String> {
-      AUTH.with(|a| {
-         if a.borrow()
-             .contains_key(&ic_cdk::caller().as_slice().to_vec())
-         {
-             Ok(())
-         } else {
-             Err(format!("is_authorized_user(): You are not authorized."))
-         }
-     })
+    Ok(())
+    //   AUTH.with(|a| {
+    //      if a.borrow()
+    //          .contains_key(&ic_cdk::caller().as_slice().to_vec())
+    //      {
+    //          Ok(())
+    //      } else {
+    //          Err(format!("is_authorized_user(): You are not authorized."))
+    //      }
+    //  })
 }
 
 fn is_authorized_admin() -> Result<(), String> {
     AUTH.with(|a| {
-        if let Some(value) = a.borrow().get(&ic_cdk::caller().as_slice().to_vec()) {
+        //if let Some(value) = a.borrow().get(&ic_cdk::caller().as_slice()) {
+        if let Some(value) = a.borrow().get(&StorableBlob::from_bytes(ic_cdk::caller().as_slice().into())) {
             if value >= Auth::Admin as u32 {
                 Ok(())
             } else {
