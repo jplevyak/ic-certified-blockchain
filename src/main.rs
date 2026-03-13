@@ -23,7 +23,6 @@ type Data = Vec<Blob>;
 type BlockTree = RbTree<Blob, Hash>;
 type Callers = Vec<Principal>;
 
-
 #[derive(Clone, Debug, CandidType, Deserialize, FromPrimitive)]
 enum Auth {
     User,
@@ -331,8 +330,7 @@ fn get_block(index: u64) -> Block {
             .with(|l| candid::decode_one(&l.borrow().get(index as u64).unwrap()).unwrap())
     } else {
         let index = index - secondary_len;
-        primary_log()
-            .with(|l| candid::decode_one(&l.borrow().get(index as u64).unwrap()).unwrap())
+        primary_log().with(|l| candid::decode_one(&l.borrow().get(index as u64).unwrap()).unwrap())
     }
 }
 
@@ -506,7 +504,10 @@ fn is_authorized_user() -> Result<(), String> {
 
 fn is_authorized_admin() -> Result<(), String> {
     AUTH.with(|a| {
-        if let Some(value) = a.borrow().get(&ic_cdk::api::msg_caller().as_slice().to_vec()) {
+        if let Some(value) = a
+            .borrow()
+            .get(&ic_cdk::api::msg_caller().as_slice().to_vec())
+        {
             if value >= Auth::Admin as u32 {
                 Ok(())
             } else {
@@ -525,11 +526,11 @@ fn post_upgrade() {
     set_certificate(&tree.root_hash());
 }
 
-
+candid::export_service!();
 
 #[ic_cdk_macros::query(name = "__get_candid_interface_tmp_hack")]
 fn export_candid() -> String {
-    "".to_string()
+    __export_service()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
