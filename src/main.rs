@@ -291,11 +291,11 @@ fn commit(certificate: Blob) -> Option<u64> {
     primary_map().with(|m| {
         let mut m = m.borrow_mut();
         for (_, h) in tree.iter() {
-            m.insert(BlobHash(*h), index as u64).unwrap();
+            m.insert(BlobHash(*h), index as u64);
         }
         for d in pending.data.iter() {
             let hash = sha2::Sha256::digest(d).into();
-            m.insert(BlobHash(hash), index as u64).unwrap();
+            m.insert(BlobHash(hash), index as u64);
         }
     });
     primary_log().with(|l| {
@@ -485,8 +485,7 @@ fn deauthorize(principal: Principal) {
 fn authorize_principal(principal: &Principal, value: Auth) {
     AUTH.with(|a| {
         a.borrow_mut()
-            .insert(principal.as_slice().to_vec(), value as u32)
-            .unwrap();
+            .insert(principal.as_slice().to_vec(), value as u32);
     });
 }
 

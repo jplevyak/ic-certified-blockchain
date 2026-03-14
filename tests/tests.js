@@ -2,10 +2,10 @@ import fetch from 'node-fetch';
 import fs from 'fs';
 import crypto from 'crypto';
 import sha256 from "sha256";
-import { lebDecode, PipeArrayBuffer } from "@dfinity/candid";
-import { Principal } from '@dfinity/principal';
-import { Secp256k1PublicKey, Secp256k1KeyIdentity } from '@dfinity/identity';
-import { Actor, Cbor, Certificate, HttpAgent, lookup_path, reconstruct, hashTreeToString } from '@dfinity/agent';
+import { lebDecode, PipeArrayBuffer } from "@icp-sdk/core/candid";
+import { Principal } from '@icp-sdk/core/principal';
+import { Secp256k1PublicKey, Secp256k1KeyIdentity } from '@icp-sdk/core/identity/secp256k1';
+import { Actor, Cbor, Certificate, HttpAgent, lookup_path, reconstruct, hashTreeToString } from '@icp-sdk/core/agent';
 import { idlFactory } from '../src/declarations/ic-certified-blockchain/ic-certified-blockchain.did.js';
 import exec from 'await-exec';
 import assert from 'assert';
@@ -95,7 +95,7 @@ try {
 }
 
 const canisterId = localCanisters['ic-certified-blockchain']['local'];
-const url = 'http://' + canisterId + '.localhost:8080';
+const url = 'http://localhost:8080';
 
 export const createActor = (idlFactory, canisterId, options) => {
 	let agentOptions = options ? {...options.agentOptions} : {};
@@ -161,13 +161,14 @@ const cert = await Certificate.create({
 	certificate: block.certificate,
 	canisterId,
 	rootKey: root_key,
+  principal: { canisterId: canisterIdPrincipal }
 });
-const certifiedData = cert.lookup([
-	"canister", canisterIdPrincipal.toUint8Array(), "certified_data"]);
+const certifiedData = cert.lookup_path([
+	"canister", canisterIdPrincipal.toUint8Array(), "certified_data"]).value;
 console.log('certifiedData', toHex(certifiedData));
 
-const time = cert.lookup(["time"]);
-console.log('certificate time', new Date(Number(lebDecode(new PipeArrayBuffer(time)) / BigInt(1000000))));
+const time = cert.lookup_path(["time"]);
+console.log('certificate time', new Date(Number(lebDecode(new PipeArrayBuffer(time.value)) / BigInt(1000000))));
 
 let block_tree = Cbor.decode(block.tree);
 let reconstructed = await reconstruct(block_tree);
@@ -176,10 +177,9 @@ console.log('reconstructed tree hash', toHex(reconstructed));
 assert(isBufferEqual(certifiedData, reconstructed));
 console.log('certifiedData == reconstructed tree hash');
 
-console.log('block_tree', hashTreeToString(block_tree));
 let block_index = new Uint8Array([0, 0, 0, 0]);
 console.log('block_index', toHex(block_index));
-const certified_blocka_0_hash = lookup_path(["certified_blocks", block_index], block_tree);
+const certified_blocka_0_hash = lookup_path(["certified_blocks", block_index], block_tree).value;
 console.log('certified_blocka_0_hash', toHex(new Uint8Array(certified_blocka_0_hash)));
 console.log('blocka_0_combined_hash', toHex(blocka_0_combined_hash));
 assert(isBufferEqual(new Uint8Array(certified_blocka_0_hash), blocka_0_combined_hash));
