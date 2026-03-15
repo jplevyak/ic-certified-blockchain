@@ -1,5 +1,5 @@
-import { Principal } from '@dfinity/principal';
-import { Cbor, Certificate, lookup_path, reconstruct, hashTreeToString } from '@dfinity/agent';
+import { Principal } from '@icp-sdk/core/principal';
+import { Cbor, Certificate, lookup_path, reconstruct, hashTreeToString } from '@icp-sdk/core/agent';
 
 const IC_ROOT_KEY = new Uint8Array([48, 129, 130, 48, 29, 6, 13, 43, 6, 1, 4, 1, 130, 220, 124, 5, 3, 1, 2, 1, 6, 12, 43, 6, 1, 4, 1, 130, 220, 124, 5, 3, 2, 1, 3, 97, 0, 129, 76, 14, 110, 199, 31, 171, 88, 59, 8, 189, 129, 55, 60, 37, 92, 60, 55, 27, 46, 132, 134, 60, 152, 164, 241, 224, 139, 116, 35, 93, 20, 251, 93, 156, 12, 213, 70, 217, 104, 95, 145, 58, 12, 11, 44, 197, 52, 21, 131, 191, 75, 67, 146, 228, 103, 219, 150, 214, 91, 155, 180, 203, 113, 113, 18, 248, 71, 46, 13, 90, 77, 20, 80, 95, 253, 116, 132, 176, 18, 145, 9, 28, 95, 135, 185, 136, 131, 70, 63, 152, 9, 26, 11, 170, 174]);
 
@@ -38,6 +38,7 @@ export async function getCertificateDate(block, canisterId) {
       certificate: block.certificate,
       canisterId,
       rootKey: root_key,
+      principal: { canisterId: canisterIdPrincipal }
   });
   const time = cert.lookup(["time"]);
   return new Date(Number(lebDecode(new PipeArrayBuffer(time)) / BigInt(1000000)));
@@ -76,7 +77,7 @@ export async function verifyIcCertifiedBlockChainEntry(block, entry_index, canis
     console.log('CertifiedData does not match tree hash');
     return false;
   }
-  const certified_entry_hash = lookup_path(["certified_blocks", entry_index], block_tree);
+  const certified_entry_hash = lookup_path(["certified_blocks", entry_index], block_tree).value;
   const entry_hash = new Uint8Array(fromHex(sha256(sha256(caller) + sha256(entry))));
   if (!isBufferEqual(new Uint8Array(certified_entry_hash), entry_hash)) {
     console.log('Certified block entry hash does not match block entry hash');
