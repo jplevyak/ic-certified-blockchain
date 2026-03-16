@@ -93,6 +93,199 @@ Multiple writers can either use the single writer workflow or they can all call 
 
 In some use cases it may be desirable to backup and remove old blocks from the canister smart contract. Since the committed log entries are individually certified, they can be verified independent of the smart contract so the backup can be used as a primary source. Safe backup and clearing of old log entries is done via a process of log rotation. Internally the blockchain log is broken up into a primary part and a secondary part.  Periodically a backup agent should `get_block()` all blocks between `first()` and `mid()` (the first index beyond the secondary part) then call `rotate()` which makes the primary secondary, deletes the data in the old secondary and makes it primary. Note that log indexes are preserved (do not change) over time and that `find()` continues to work for entries in both the primary and secondary parts of the log.
 
+## CLI
+
+The `cli/` directory contains `icb`, a Node.js command-line tool that covers the full canister API.
+
+### Setup
+
+```
+(cd cli; npm install)        # or: make cli
+cp cli/.env.example cli/.env
+# edit cli/.env to set your identity and canister ID
+```
+
+### Configuration
+
+All settings can be placed in `cli/.env` (relative paths are resolved from the `cli/` directory) or passed as global flags:
+
+| Variable | Flag | Default | Description |
+|---|---|---|---|
+| `IC_NETWORK` | `--network <url>` | `http://localhost:8080` | Replica or boundary-node URL |
+| `IC_IDENTITY_FILE` | `--identity <file>` | — | Path to a secp256k1 PEM file (`dfx identity export <name>`) |
+| `IC_CANISTER_ID` | `--canister <id>` | auto-detected | Canister ID; auto-read from `.dfx/local/canister_ids.json` if omitted |
+| `IC_PRODUCTION` | `--production` | `false` | Skip `fetchRootKey()` on mainnet |
+
+### Commands
+
+#### `icb status`
+
+Print chain state and the authorized principal list.
+
+```
+$ icb status
+network    : http://localhost:8080
+canister   : uxrrr-q7777-77774-qaaaq-cai
+first      : 0
+mid        : 10
+next       : 12
+blocks     : 12
+last_hash  : 3a7f…
+staged     : no
+authorized : 1
+  abc12-… [Admin]
+```
+
+#### `icb append [entries…] [-f file] [-x hex]`
+
+Safely append a block.  Each positional argument becomes one blob entry (UTF-8 encoded).  Binary entries can be added with `--file` (reads the file) or `--hex` (decodes a hex string).  All options are repeatable and can be combined in one block.
+
+Before staging, any previously staged data is committed first, and concurrent-writer races are handled automatically.
+
+```bash
+icb append "log entry text"
+icb append "entry one" "entry two"          # two entries in one block
+icb append --file audit.bin                  # binary file entry
+icb append "label" --file data.bin           # mixed entries in one block
+icb append --hex deadbeef                    # raw hex entry
+```
+
+#### `icb get <index> [--verify] [--verbose] [--raw]`
+
+Display a block.  Text entries are printed as strings; binary entries are shown as hex.
+
+* `--verify` — verify the IC certificate, Merkle tree, and entry hashes
+* `--verbose` — also print per-entry sha256 and certificate/tree excerpts
+* `--raw` — output raw JSON (snapshot format)
+
+```
+$ icb get 5 --verify
+Block #5  [2 entries]
+  previous_hash : a1b2c3…
+  entry[0]
+    caller : abc12-…
+    data   : "hello world"
+  entry[1]
+    caller : abc12-…
+    data   : <256 bytes 0xdeadbeef…>
+Verifying… OK
+```
+
+#### `icb find <query> [-f] [-x] [-v]`
+
+Find which block contains a given data entry by hashing the query and calling `find()`.
+
+* Default: sha256 of the query text
+* `-f` / `--file`: sha256 of the file at the given path
+* `-x` / `--hex`: treat the query as a raw 32-byte hex hash (no sha256 applied)
+* `-v` / `--verbose`: print the full block after finding it
+
+```bash
+icb find "hello world"
+icb find --file audit.bin
+icb find --hex a9a66794…
+```
+
+#### `icb download [-s N] [-e N] [-o dir]`
+
+Download a range of blocks to individual JSON files (`block-<index>.json`) in a directory.
+
+```bash
+icb download                         # all current blocks → ./blocks/
+icb download --start 10 --end 19 --output ./archive/
+```
+
+#### `icb snapshot [-s N] [-e N] [-o file]`
+
+Download a range of blocks (default: all) into a single self-contained JSON file that includes the canister ID and root key, making it suitable for offline verification.
+
+```bash
+icb snapshot                         # → blockchain-<timestamp>.json
+icb snapshot --output backup.json
+icb snapshot --start 0 --end 99 --output segment.json
+```
+
+Snapshot format:
+
+```json
+{
+  "version": 1,
+  "canisterId": "uxrrr-q7777-77774-qaaaq-cai",
+  "rootKey": "<hex>",
+  "network": "http://localhost:8080",
+  "createdAt": "2026-03-16T19:00:00.000Z",
+  "first": 0,
+  "next": 100,
+  "blocks": [
+    {
+      "index": 0,
+      "certificate": "<hex>",
+      "tree": "<hex>",
+      "data": ["<hex>", "…"],
+      "callers": ["<principal>", "…"],
+      "previous_hash": "<hex>"
+    }
+  ]
+}
+```
+
+#### `icb verify [snapshot] [-s N] [-e N] [--no-chain]`
+
+Verify blockchain integrity.  Without arguments, downloads and verifies the live chain.  With a snapshot file, verifies entirely offline using the root key stored in the file.
+
+For each block, the following are checked:
+
+1. IC certificate signature (BLS over the subnet delegation chain)
+2. Reconstructed Merkle tree hash matches `certified_data` in the certificate
+3. Each entry's `sha256(sha256(caller) ‖ sha256(data))` matches the certified tree
+4. `previous_hash` field matches the certified value in the tree
+5. Hash chain continuity: `block[i].previous_hash == sha256(candid_encode(block[i-1]))` — rotation boundaries (all-zero previous_hash) are noted, not flagged as errors
+
+```bash
+icb verify                           # live chain
+icb verify backup.json               # offline snapshot
+icb verify backup.json --start 50    # partial range
+icb verify --no-chain                # skip hash-chain re-derivation
+```
+
+#### `icb rotate`
+
+Rotate the log: the current primary segment becomes secondary and the secondary (if any) is deleted.  Prints the before/after `first`/`mid`/`next` indices.
+
+A safe rotation workflow is:
+
+```bash
+icb snapshot --end $(icb status | grep ^mid | awk '{print $3-1}')
+icb rotate
+```
+
+#### `icb auth list`
+
+List all authorized principals and their roles (`User` or `Admin`).
+
+#### `icb auth add <principal> [--admin]`
+
+Authorize a principal.  Default role is `User`; pass `--admin` for `Admin`.  Requires the calling identity to be an `Admin`.
+
+```bash
+icb auth add abc12-… --admin
+```
+
+#### `icb auth remove <principal>`
+
+Deauthorize a principal.  Requires `Admin`.
+
+### Global flags
+
+All commands accept these flags, which override `.env`:
+
+```
+--network <url>    IC network URL
+--identity <file>  Identity PEM file (secp256k1)
+--canister <id>    Canister ID
+--production       Use mainnet root key; skip fetchRootKey()
+```
+
 ## Development
 
 ### Dependencies
@@ -103,14 +296,19 @@ In some use cases it may be desirable to backup and remove old blocks from the c
 
 ### Setup
 
-* (cd tests; npm i)
+```
+(cd cli; npm install)
+(cd tests; npm install)
+```
 
 ### Build
 
-* make build
+* `make build` — compile the Rust canister
+* `make cli` — install CLI dependencies
 
 ### Test
 
-* dfx start --background
-* dfx deploy
-* make test
+```
+make test-clean    # stop → clean start → deploy → run tests
+make test          # run tests against the already-running canister
+```

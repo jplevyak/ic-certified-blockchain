@@ -1,0 +1,14 @@
+{
+  "name": "icb-cli",
+  "version": "1.0.0",
+  "description": "CLI for ic-certified-blockchain",
+  "type": "module",
+  "bin": { "icb": "./cli.js" },
+  "dependencies": {
+    "@icp-sdk/core": "^5.0.0",
+    "commander": "^11.1.0",
+    "dotenv": "^16.4.0",
+    "node-fetch": "^3.3.0",
+    "sha256": "^0.2.0"
+  }
+}

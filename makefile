@@ -1,7 +1,10 @@
-all:: build test
+all:: build cli test
 
 build:
 	RUSTFLAGS='-C target-feature=+bulk-memory' cargo build --release --target wasm32-unknown-unknown
+
+cli:
+	(cd cli; npm install)
 
 redeploy: build
 	RUSTFLAGS='-C target-feature=+bulk-memory' dfx deploy --mode=reinstall ic-certified-blockchain -y
@@ -21,4 +24,4 @@ test:
 test-clean:
 	bash test.sh
 
-.PHONY: all build redeploy restart store test test-clean
+.PHONY: all build cli redeploy restart store test test-clean
