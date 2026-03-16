@@ -513,32 +513,71 @@ program.command('snapshot')
     console.log(`${snap.blocks.length} block(s) saved to ${outFile}`);
   });
 
+// ── verify helpers ───────────────────────────────────────────────────────────
+
+// Load records from a local path (snapshot file, single block file, or directory).
+// Returns { records, canisterId, rootKey, label } where canisterId/rootKey may be
+// null if the source doesn't contain them (single files / directories).
+function loadLocalBlocks(inputPath, opts) {
+  const stat = fs.statSync(inputPath);
+
+  if (stat.isDirectory()) {
+    const files = fs.readdirSync(inputPath)
+      .filter(f => /^block-\d+\.json$/.test(f))
+      .sort((a, b) => parseInt(a.match(/(\d+)/)[1]) - parseInt(b.match(/(\d+)/)[1]));
+    if (files.length === 0) die(`no block-*.json files found in ${inputPath}`);
+    let records = files.map(f => {
+      const obj = JSON.parse(fs.readFileSync(path.join(inputPath, f), 'utf8'));
+      return { index: obj.index, block: snapToBlock(obj) };
+    });
+    const start = opts.start !== undefined ? Number(opts.start) : records[0].index;
+    const end   = opts.end   !== undefined ? Number(opts.end)   : records[records.length - 1].index;
+    records = records.filter(r => r.index >= start && r.index <= end);
+    return { records, canisterId: null, rootKey: null,
+      label: `directory ${inputPath}  (${records.length} block(s), indices ${start}..${end})` };
+  }
+
+  const content = JSON.parse(fs.readFileSync(inputPath, 'utf8'));
+
+  // Snapshot file produced by `icb snapshot`
+  if (content.version && Array.isArray(content.blocks)) {
+    if (!content.canisterId) die('snapshot missing canisterId');
+    if (!content.rootKey)    die('snapshot missing rootKey (re-snapshot with this CLI)');
+    const start = opts.start !== undefined ? Number(opts.start) : content.first;
+    const end   = opts.end   !== undefined ? Number(opts.end)   : content.next - 1;
+    const records = content.blocks
+      .filter(b => b.index >= start && b.index <= end)
+      .map(b => ({ index: b.index, block: snapToBlock(b) }));
+    return { records, canisterId: content.canisterId, rootKey: fromHex(content.rootKey),
+      label: `snapshot ${inputPath}  (blocks ${start}..${end})` };
+  }
+
+  // Single block file produced by `icb download`
+  if (content.index !== undefined && content.certificate !== undefined) {
+    return { records: [{ index: content.index, block: snapToBlock(content) }],
+      canisterId: null, rootKey: null, label: `block file ${inputPath}` };
+  }
+
+  die(`unrecognised file format: ${inputPath}`);
+}
+
 // ── verify ───────────────────────────────────────────────────────────────────
-program.command('verify [snapshot]')
-  .description('Verify blockchain integrity (live or from a snapshot file)')
-  .option('-s, --start <n>', 'Start index (default: first())')
-  .option('-e, --end <n>',   'End index inclusive (default: next()-1)')
-  .option('--no-chain',      'Skip previous_hash chain re-derivation')
-  .action(async (snapshotFile, opts) => {
-    let records = [];    // [{ index, block }]
+program.command('verify [path]')
+  .description(
+    'Verify blockchain integrity.\n' +
+    '  <path> can be: a snapshot file, a single block-N.json file, or a directory\n' +
+    '  of block-*.json files.  Omit <path> to verify the live chain.'
+  )
+  .option('-s, --start <n>',    'Start index (default: first in source)')
+  .option('-e, --end <n>',      'End index inclusive (default: last in source)')
+  .option('--no-chain',         'Skip previous_hash chain re-derivation')
+  .option('--root-key <hex>',   'Root key for fully offline verification (hex DER)')
+  .action(async (inputPath, opts) => {
+    let records = [];
     let rootKey, canisterId;
 
-    if (snapshotFile) {
-      // ── Offline snapshot verification ──────────────────────────────────────
-      if (!fs.existsSync(snapshotFile)) die(`snapshot file not found: ${snapshotFile}`);
-      const snap = JSON.parse(fs.readFileSync(snapshotFile, 'utf8'));
-      if (!snap.canisterId) die('snapshot missing canisterId');
-      if (!snap.rootKey)    die('snapshot missing rootKey (re-snapshot with this CLI)');
-      canisterId = snap.canisterId;
-      rootKey    = fromHex(snap.rootKey);
-      const start = opts.start !== undefined ? Number(opts.start) : snap.first;
-      const end   = opts.end   !== undefined ? Number(opts.end)   : snap.next - 1;
-      records = snap.blocks
-        .filter(b => b.index >= start && b.index <= end)
-        .map(b => ({ index: b.index, block: snapToBlock(b) }));
-      console.log(`Verifying snapshot: ${snapshotFile}  (blocks ${start}..${end})`);
-    } else {
-      // ── Live chain verification ─────────────────────────────────────────────
+    if (!inputPath) {
+      // ── Live chain ──────────────────────────────────────────────────────────
       const ctx = await makeActor(program.opts());
       canisterId = ctx.canisterId;
       rootKey    = ctx.agent.rootKey;
@@ -552,6 +591,29 @@ program.command('verify [snapshot]')
         process.stdout.write(`  fetching ${i}/${end}\r`);
       }
       console.log();
+    } else {
+      // ── Local file or directory ─────────────────────────────────────────────
+      if (!fs.existsSync(inputPath)) die(`not found: ${inputPath}`);
+      const loaded = loadLocalBlocks(inputPath, opts);
+      records    = loaded.records;
+      canisterId = loaded.canisterId;
+      rootKey    = loaded.rootKey;
+      console.log(`Verifying ${loaded.label}`);
+
+      // Root key: snapshot supplies it; otherwise use --root-key or fetch live
+      if (!rootKey) {
+        if (opts.rootKey) {
+          rootKey = fromHex(opts.rootKey);
+        } else {
+          process.stdout.write('Fetching root key from network… ');
+          const ctx = await makeActor(program.opts());
+          rootKey = ctx.agent.rootKey;
+          if (!canisterId) canisterId = ctx.canisterId;
+          console.log('OK');
+        }
+      }
+      // canisterId: snapshot supplies it; otherwise resolve from global opts / dfx
+      if (!canisterId) canisterId = resolveCanisterId(program.opts().canister);
     }
 
     if (records.length === 0) { console.log('No blocks in range.'); return; }

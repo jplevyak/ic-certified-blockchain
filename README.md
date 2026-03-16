@@ -229,9 +229,16 @@ Snapshot format:
 }
 ```
 
-#### `icb verify [snapshot] [-s N] [-e N] [--no-chain]`
+#### `icb verify [path] [-s N] [-e N] [--no-chain] [--root-key <hex>]`
 
-Verify blockchain integrity.  Without arguments, downloads and verifies the live chain.  With a snapshot file, verifies entirely offline using the root key stored in the file.
+Verify blockchain integrity.  `<path>` can be:
+
+| `<path>` | Source |
+|---|---|
+| *(omitted)* | Live chain — fetches blocks directly from the canister |
+| `backup.json` | Snapshot file produced by `icb snapshot` — fully offline, root key embedded |
+| `block-5.json` | Single block file produced by `icb download` |
+| `./blocks/` | Directory of `block-*.json` files produced by `icb download` |
 
 For each block, the following are checked:
 
@@ -239,13 +246,18 @@ For each block, the following are checked:
 2. Reconstructed Merkle tree hash matches `certified_data` in the certificate
 3. Each entry's `sha256(sha256(caller) ‖ sha256(data))` matches the certified tree
 4. `previous_hash` field matches the certified value in the tree
-5. Hash chain continuity: `block[i].previous_hash == sha256(candid_encode(block[i-1]))` — rotation boundaries (all-zero previous_hash) are noted, not flagged as errors
+5. Hash chain continuity: `block[i].previous_hash == sha256(candid_encode(block[i-1]))` — rotation boundaries (all-zero `previous_hash`) are noted, not flagged as errors
+
+When verifying a single block file or a directory, the root key must be available.  It is fetched from the live network automatically unless `--root-key` is given.  The canister ID is resolved from the global `--canister` flag or auto-detected.
 
 ```bash
-icb verify                           # live chain
-icb verify backup.json               # offline snapshot
-icb verify backup.json --start 50    # partial range
-icb verify --no-chain                # skip hash-chain re-derivation
+icb verify                              # live chain
+icb verify backup.json                  # offline snapshot (root key embedded)
+icb verify backup.json --start 50       # partial range from snapshot
+icb verify ./blocks/                    # directory of downloaded blocks
+icb verify block-5.json                 # single downloaded block
+icb verify ./blocks/ --root-key 3081…  # fully offline, root key explicit
+icb verify --no-chain                   # skip hash-chain re-derivation
 ```
 
 #### `icb rotate`

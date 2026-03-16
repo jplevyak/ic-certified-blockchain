@@ -14,14 +14,10 @@ restart:
 	dfx start --clean --background
 	RUSTFLAGS='-C target-feature=+bulk-memory' dfx deploy --all
 
-store:
-	dfx canister call  ic-certified-blockchain authorize '(principal "vkgr6-2tybk-buvwc-vwohz-6muzj-5mqpb-ul5bi-ewcq5-47dxq-aq55y-uae", variant{ Admin })'
-	node store/store.js test/identity.pem $(dfx canister id ic-certified-blockchain) http://127.0.0.1:8080 false store.dat
-
 test:
 	(cd tests; node test.js)
 
 test-clean:
 	bash test.sh
 
-.PHONY: all build cli redeploy restart store test test-clean
+.PHONY: all build cli redeploy restart test test-clean
