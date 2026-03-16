@@ -67,13 +67,94 @@ service blockchain: (opt text) -> {
 
 ## Certification
 
-The certificate contains an NNS signed delegation for the canister to the subnet which certifies the canister root hash along with the date.  The canister root hash is the root of the Merkle tree containing the hashes of all the block entries.  This enables each entry to be independently certified by extracting the corresponding path from the tree.  Code to verify blocks is found in the `./verify` directory.
+Each block carries two extra fields beyond the raw data: a `certificate` and a `tree`.  The certificate is issued by the Internet Computer subnet and contains an NNS-signed delegation that certifies the canister's `certified_data` hash along with the timestamp.  The tree is the canister's own Merkle hash tree, whose root is the value committed as `certified_data`.  Together they allow any client with the IC root key to independently verify every block and every entry — offline, without trusting the canister or its controllers.  See [Verification](#verification) below for the full trust chain.
 
 Additional verifications e.g. the signature of the appender should be verified at the application level.
 
 ## Storing Blocks
 
-A block is an array of byte arrays (entries).  First the block is staged by calling `prepare()` which returns the tree root hash (for reference).  Then the certificate is retrieved via `get_certificate()` and then the block is appended by calling `append()` with the certificate.  Code to upload blocks is found in the `./store` directory.
+A block is an array of byte arrays (entries).  First the block is staged by calling `prepare()` which returns the tree root hash (for reference).  Then the certificate is retrieved via `get_certificate()` and then the block is appended by calling `commit()` with the certificate.  Use `icb append` (see [CLI](#cli)) for safe, race-tolerant block appending from the command line.
+
+## Verification
+
+### Trust Anchor: The IC Root Key
+
+The IC root key is a BLS12-381 public key controlled by the NNS.  On mainnet it is a well-known constant embedded in all IC SDKs.  On a local replica it is fetched via `agent.fetchRootKey()`.  The root key is the sole external trust anchor; everything else is derived from it cryptographically.
+
+### IC Certificate Structure
+
+`block.certificate` is a CBOR-encoded structure with three top-level fields:
+
+| Field | Contents |
+|---|---|
+| `tree` | The IC global state tree (a Merkle hash tree over NNS-visible state) |
+| `signature` | BLS12-381 signature over `b"\x0aic-state-tree" \|\| sha256(tree_root)` |
+| `delegation` | A signed delegation from the NNS root key to the subnet's BLS key |
+
+The delegation itself is a smaller certificate signed by the NNS root key that embeds the subnet's public key.  Verification of the outer certificate uses the subnet key derived through this delegation.
+
+### Walking the Trust Chain
+
+```
+NNS Root Key  (BLS12-381 public key — trust anchor)
+     │
+     │  signs delegation.certificate  (BLS)
+     ▼
+Subnet Public Key  (extracted from delegation.certificate.tree)
+     │
+     │  signs certificate.signature  (BLS)
+     │    over: b"\x0aic-state-tree" || sha256(certificate.tree root)
+     ▼
+Certificate Tree Root Hash
+     │
+     │  Merkle path: canister/<canister_id>/certified_data
+     ▼
+certified_data  (32 bytes — the canister's committed hash)
+     │
+     │  must equal  reconstruct(block.tree)
+     ▼
+Block Tree Root Hash
+     │
+     │  Merkle paths under "certified_blocks":
+     │    key \x00\x00\x00\x00  →  entry hash [0]
+     │    key \x00\x00\x00\x01  →  entry hash [1]
+     │    …
+     │    key "previous_hash"   →  previous_hash bytes
+     ▼
+Individual Entry Hashes  +  previous_hash
+```
+
+### Canister Merkle Tree Layout
+
+`block.tree` is a CBOR-encoded IC hash tree (the same format used by the IC state tree).  The canister populates it under a single subtree key `"certified_blocks"`:
+
+```
+certified_blocks
+├── 0x00000000  →  sha256( sha256(callers[0]) ‖ sha256(data[0]) )
+├── 0x00000001  →  sha256( sha256(callers[1]) ‖ sha256(data[1]) )
+├── …
+└── "previous_hash"  →  previous_hash  (32 raw bytes)
+```
+
+Entry keys are 4-byte big-endian indices within the block.  Entry values are compound hashes that bind both the caller identity and the data payload together under a single 32-byte digest.
+
+The canister calls `set_certified_data(reconstruct(tree))` during `prepare()` / `prepare_some()`, so the IC subnet certifies the exact tree root in its next update response.  At `commit()` time the caller supplies the certificate that the IC issued for that root.
+
+### Five Verification Steps
+
+`icb verify` (and `icb get --verify`) performs these checks for every block:
+
+1. **BLS signature** — `Certificate.create()` verifies the BLS12-381 signature using the root key, following the NNS → subnet delegation chain.
+
+2. **Certified data consistency** — look up `canister/<canister_id>/certified_data` in the certificate tree; decode `block.tree` and call `reconstruct()` to get its root hash; the two must be equal.
+
+3. **Entry hash verification** — for each entry `i`, look up key `i` (4-byte big-endian) under `certified_blocks` in the block tree; the stored value must equal `sha256(sha256(callers[i]) ‖ sha256(data[i]))`, binding both the caller principal and the raw data bytes to the certificate.
+
+4. **`previous_hash` consistency** — look up key `"previous_hash"` in the block tree; it must match `block.previous_hash`, confirming the linkage field itself was part of the certified state.
+
+5. **Hash chain continuity** — for adjacent blocks `block[i].previous_hash == sha256(candid_encode(block[i-1]))`, cryptographically chaining each block to its predecessor.  An all-zero `previous_hash` marks a log-rotation boundary and is noted, not flagged as an error.
+
+Once all five steps pass, a block is proven to have been committed to the Internet Computer at the time in the certificate, with the exact data and caller identities recorded and unalterable.
 
 ## Blockchain Persistence
 
@@ -95,7 +176,12 @@ In some use cases it may be desirable to backup and remove old blocks from the c
 
 ## CLI
 
-The `cli/` directory contains `icb`, a Node.js command-line tool that covers the full canister API.
+The `cli/` directory contains `icb`, a Node.js command-line tool that covers the full canister API.  A convenience shell wrapper `icb.sh` is provided at the project root so the CLI can be invoked from any directory without a global install:
+
+```bash
+./icb.sh status
+./icb.sh verify backup.json
+```
 
 ### Setup
 
@@ -240,10 +326,10 @@ Verify blockchain integrity.  `<path>` can be:
 | `block-5.json` | Single block file produced by `icb download` |
 | `./blocks/` | Directory of `block-*.json` files produced by `icb download` |
 
-For each block, the following are checked:
+For each block, the five verification steps described in [Verification](#verification) are performed:
 
-1. IC certificate signature (BLS over the subnet delegation chain)
-2. Reconstructed Merkle tree hash matches `certified_data` in the certificate
+1. IC certificate BLS signature (NNS → subnet delegation chain)
+2. Reconstructed Merkle tree root matches `certified_data` in the certificate
 3. Each entry's `sha256(sha256(caller) ‖ sha256(data))` matches the certified tree
 4. `previous_hash` field matches the certified value in the tree
 5. Hash chain continuity: `block[i].previous_hash == sha256(candid_encode(block[i-1]))` — rotation boundaries (all-zero `previous_hash`) are noted, not flagged as errors
@@ -303,8 +389,7 @@ All commands accept these flags, which override `.env`:
 ### Dependencies
 
 * node, npm
-* rustup, cargo, rustc with wasm
-* hash\_tree.rs is copied from github.com/dfinity/agent-rs/src/hash\_tree/mod.rs
+* rustup, cargo, rustc with wasm32 target
 
 ### Setup
 
