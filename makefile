@@ -4,7 +4,7 @@ build:
 	RUSTFLAGS='-C target-feature=+bulk-memory' cargo build --release --target wasm32-unknown-unknown
 
 redeploy: build
-	RUSTFLAGS='-C target-feature=+bulk-memory' dfx deploy --mode=reinstall ic-certified-blockchain -y 
+	RUSTFLAGS='-C target-feature=+bulk-memory' dfx deploy --mode=reinstall ic-certified-blockchain -y
 
 restart:
 	-dfx stop
@@ -16,6 +16,9 @@ store:
 	node store/store.js test/identity.pem $(dfx canister id ic-certified-blockchain) http://127.0.0.1:8080 false store.dat
 
 test:
-	(cd tests; node tests.js)
+	(cd tests; node test.js)
 
-.PHONY: all build redeploy restart store test
+test-clean:
+	bash test.sh
+
+.PHONY: all build redeploy restart store test test-clean
