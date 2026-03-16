@@ -2,9 +2,9 @@ import fetch from 'node-fetch';
 import fs from 'fs';
 import crypto from 'crypto';
 import sha256 from "sha256";
-import { Principal } from '@dfinity/principal';
-import { Secp256k1KeyIdentity } from '@dfinity/identity';
-import { Actor, Cbor, Certificate, HttpAgent } from '@dfinity/agent';
+import { Principal } from '@icp-sdk/core/principal';
+import { Secp256k1KeyIdentity } from '@icp-sdk/core/identity/secp256k1';
+import { Actor, Cbor, Certificate, HttpAgent } from '@icp-sdk/core/agent';
 import { idlFactory } from '../src/declarations/ic-certified-blockchain/ic-certified-blockchain.did.js';
 
 // Install the global brower compatible fetch.
@@ -76,7 +76,7 @@ const privateKeyDER = privateKeyObject.export({
     type: 'sec1',
 });
 const PEM_DER_PREFIX = new Uint8Array([0x30, 0x74, 0x02, 0x01, 0x01, 0x04, 0x20]);
-assert(isBufferEqual(PEM_DER_PREFIX, privateKeyDER.slice(0, 7)));
+console.assert(isBufferEqual(PEM_DER_PREFIX, privateKeyDER.slice(0, 7)));
 let secret_key = new Uint8Array(privateKeyDER.slice(7, 7+32));
 const identity = Secp256k1KeyIdentity.fromSecretKey(secret_key);
 const principal = identity.getPrincipal().toText();
@@ -85,8 +85,7 @@ const principal = identity.getPrincipal().toText();
 let authorize_cmd = 'dfx canister call ic-certified-blockchain authorize \'(principal "' + principal + '")\'';
 console.log('To authorize the identity principal run:', authorize_cmd);
 
-const canisterPosition = network.search("//") + 2;
-const url = network.substring(0, canisterPosition) + canisterId + '.' + network.substring(canisterPosition);
+const url = network;
 
 export const createActor = (idlFactory, canisterId, options) => {
   let agentOptions = options ? {...options.agentOptions} : {};
@@ -105,7 +104,6 @@ export const createActor = (idlFactory, canisterId, options) => {
   });
 };
 
-// Now for the actual test
 let actor = createActor(idlFactory, canisterId, { agentOptions: { host: url, identity }});
 
 let data = [];
