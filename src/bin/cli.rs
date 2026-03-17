@@ -9,6 +9,18 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[path = "../hash_tree.rs"]
+mod hash_tree;
+use hash_tree::{HashTree, Label, LookupResult};
+
+// We parse the exact same structure as the replica certificate
+#[derive(Deserialize)]
+struct ReplicaCertificate<'a> {
+    #[serde(borrow)]
+    tree: HashTree<'a>,
+    signature: serde_bytes::ByteBuf,
+}
+
 // ── Candid Block type (must match src/main.rs Block struct) ─────────────────
 #[derive(Clone, Debug, CandidType, Deserialize, Serialize)]
 struct Block {
@@ -190,7 +202,7 @@ fn load_identity(file: Option<String>) -> Result<Option<ic_agent::identity::Secp
             Err(_) => return Ok(None),
         },
     };
-    
+
     // Resolve path
     let resolved = if f.starts_with('~') {
         let home = std::env::var("HOME").unwrap_or_default();
@@ -203,7 +215,7 @@ fn load_identity(file: Option<String>) -> Result<Option<ic_agent::identity::Secp
     if (!resolved.exists()) {
         anyhow::bail!("identity file not found: {}", resolved.display());
     }
-    
+
     let identity = ic_agent::identity::Secp256k1Identity::from_pem_file(&resolved)
         .context("unsupported identity format (expected secp256k1 SEC1)")?;
     Ok(Some(identity))
@@ -211,20 +223,19 @@ fn load_identity(file: Option<String>) -> Result<Option<ic_agent::identity::Secp
 
 async fn make_agent(cli: &Cli) -> Result<(Agent, Principal)> {
     let canister_id = resolve_canister_id(cli.canister.clone())?;
-    
-    let mut builder = Agent::builder()
-        .with_url(&cli.network);
-        
+
+    let mut builder = Agent::builder().with_url(&cli.network);
+
     if let Some(identity) = load_identity(cli.identity.clone())? {
         builder = builder.with_identity(identity);
     }
-    
+
     let agent = builder.build()?;
-    
+
     if !cli.production {
         agent.fetch_root_key().await?;
     }
-    
+
     Ok((agent, canister_id))
 }
 
@@ -233,7 +244,7 @@ async fn main() -> Result<()> {
     // Load .env if present
     let _ = dotenv();
     let cli = Cli::parse();
-    
+
     let (agent, canister_id) = make_agent(&cli).await?;
     let canister = CanisterBuilder::new()
         .with_agent(&agent)
@@ -246,8 +257,10 @@ async fn main() -> Result<()> {
             let (mid,): (u64,) = canister.query("mid").build().call().await?;
             let (next,): (u64,) = canister.query("next").build().call().await?;
             let (last_hash,): (String,) = canister.query("last_hash").build().call().await?;
-            let (staged,): (Option<Vec<u8>>,) = canister.query("get_certificate").build().call().await?;
-            let (auths,): (Vec<Authorization>,) = canister.query("get_authorized").build().call().await?;
+            let (staged,): (Option<Vec<u8>>,) =
+                canister.query("get_certificate").build().call().await?;
+            let (auths,): (Vec<Authorization>,) =
+                canister.query("get_authorized").build().call().await?;
 
             println!("network    : {}", cli.network);
             println!("canister   : {}", canister_id);
@@ -256,28 +269,58 @@ async fn main() -> Result<()> {
             println!("next       : {}", next);
             println!("blocks     : {}", next.saturating_sub(first));
             println!("last_hash  : {}", last_hash);
-            println!("staged     : {}", if staged.is_some() { "yes (pending commit)" } else { "no" });
+            println!(
+                "staged     : {}",
+                if staged.is_some() {
+                    "yes (pending commit)"
+                } else {
+                    "no"
+                }
+            );
             println!("authorized : {}", auths.len());
-            
+
             for a in auths {
-                let role = if a.auth == Auth::Admin { "Admin" } else { "User" };
+                let role = if a.auth == Auth::Admin {
+                    "Admin"
+                } else {
+                    "User"
+                };
                 println!("  {}  [{}]", a.id.to_text(), role);
             }
         }
-        Commands::Get { index, verbose, verify, raw } => {
-            let (block,): (Block,) = canister.query("get_block").with_arg(*index).build().call().await
+        Commands::Get {
+            index,
+            verbose,
+            verify,
+            raw,
+        } => {
+            let (block,): (Block,) = canister
+                .query("get_block")
+                .with_arg(*index)
+                .build()
+                .call()
+                .await
                 .context(format!("get_block({}) failed", index))?;
-            
+
             if *raw {
                 let json = serde_json::to_string_pretty(&block)?;
                 println!("{}", json);
                 return Ok(());
             }
-            
-            println!("Block #{}  [{} entr{}]", index, block.data.len(), if block.data.len() == 1 { "y" } else { "ies" });
+
+            println!(
+                "Block #{}  [{} entr{}]",
+                index,
+                block.data.len(),
+                if block.data.len() == 1 { "y" } else { "ies" }
+            );
             println!("  previous_hash : {}", to_hex(&block.previous_hash));
             for (i, data) in block.data.iter().enumerate() {
-                let caller = block.callers.get(i).map(|c| c.to_text()).unwrap_or_default();
+                let caller = block
+                    .callers
+                    .get(i)
+                    .map(|c| c.to_text())
+                    .unwrap_or_default();
                 println!("  entry[{}]", i);
                 println!("    caller : {}", caller);
                 println!("    data   : <{} bytes>", data.len());
@@ -285,12 +328,21 @@ async fn main() -> Result<()> {
                     println!("    sha256 : {}", to_hex(&sha256bytes(data)));
                 }
             }
-            
+
             if *verbose {
-                println!("  certificate  : {}...", &to_hex(&block.certificate).chars().take(64).collect::<String>());
-                println!("  tree         : {}...", &to_hex(&block.tree).chars().take(64).collect::<String>());
+                println!(
+                    "  certificate  : {}...",
+                    &to_hex(&block.certificate)
+                        .chars()
+                        .take(64)
+                        .collect::<String>()
+                );
+                println!(
+                    "  tree         : {}...",
+                    &to_hex(&block.tree).chars().take(64).collect::<String>()
+                );
             }
-            
+
             if *verify {
                 println!("Verification not fully fully implemented offline yet in this CLI.");
             }
@@ -307,15 +359,20 @@ async fn main() -> Result<()> {
                 let bytes = fs::read(f).context("file not found")?;
                 blob_entries.push(bytes);
             }
-            
+
             if blob_entries.is_empty() {
                 anyhow::bail!("no entries — provide text args, --file <path>, or --hex <hex>");
             }
-            
+
             let index = safe_append(&canister, blob_entries).await?;
             println!("Block appended at index {}", index);
         }
-        Commands::Find { query, file, hex, verbose } => {
+        Commands::Find {
+            query,
+            file,
+            hex,
+            verbose,
+        } => {
             let hash = if *hex {
                 let h = from_hex(query)?;
                 if h.len() != 32 {
@@ -332,26 +389,54 @@ async fn main() -> Result<()> {
             };
 
             let std_hash: [u8; 32] = hash; // Ensure we match the Rust type (Hash is [u8; 32])
-            let (result,): (Option<u64>,) = canister.query("find").with_arg(std_hash.to_vec()).build().call().await?;
+            let (result,): (Option<u64>,) = canister
+                .query("find")
+                .with_arg(std_hash.to_vec())
+                .build()
+                .call()
+                .await?;
 
             if let Some(index) = result {
                 println!("Found at block {}", index);
                 if *verbose {
-                    let (block,): (Block,) = canister.query("get_block").with_arg(index).build().call().await
+                    let (block,): (Block,) = canister
+                        .query("get_block")
+                        .with_arg(index)
+                        .build()
+                        .call()
+                        .await
                         .context(format!("get_block({}) failed", index))?;
-                    
-                    println!("Block #{}  [{} entr{}]", index, block.data.len(), if block.data.len() == 1 { "y" } else { "ies" });
+
+                    println!(
+                        "Block #{}  [{} entr{}]",
+                        index,
+                        block.data.len(),
+                        if block.data.len() == 1 { "y" } else { "ies" }
+                    );
                     println!("  previous_hash : {}", to_hex(&block.previous_hash));
                     for (i, data) in block.data.iter().enumerate() {
-                        let caller = block.callers.get(i).map(|c| c.to_text()).unwrap_or_default();
+                        let caller = block
+                            .callers
+                            .get(i)
+                            .map(|c| c.to_text())
+                            .unwrap_or_default();
                         println!("  entry[{}]", i);
                         println!("    caller : {}", caller);
                         println!("    data   : <{} bytes>", data.len());
                         println!("    sha256 : {}", to_hex(&sha256bytes(data)));
                     }
-                    
-                    println!("  certificate  : {}...", &to_hex(&block.certificate).chars().take(64).collect::<String>());
-                    println!("  tree         : {}...", &to_hex(&block.tree).chars().take(64).collect::<String>());
+
+                    println!(
+                        "  certificate  : {}...",
+                        &to_hex(&block.certificate)
+                            .chars()
+                            .take(64)
+                            .collect::<String>()
+                    );
+                    println!(
+                        "  tree         : {}...",
+                        &to_hex(&block.tree).chars().take(64).collect::<String>()
+                    );
                 }
             } else {
                 println!("Not found");
@@ -366,18 +451,29 @@ async fn main() -> Result<()> {
             }
             let s = start.unwrap_or(first);
             let e = end.unwrap_or(next.saturating_sub(1));
-            
-            if s > e { anyhow::bail!("start ({}) > end ({})", s, e); }
-            if s < first { anyhow::bail!("start ({}) < first() ({})", s, first); }
-            if e >= next { anyhow::bail!("end ({}) >= next() ({})", e, next); }
-            
+
+            if s > e {
+                anyhow::bail!("start ({}) > end ({})", s, e);
+            }
+            if s < first {
+                anyhow::bail!("start ({}) < first() ({})", s, first);
+            }
+            if e >= next {
+                anyhow::bail!("end ({}) >= next() ({})", e, next);
+            }
+
             fs::create_dir_all(output)?;
             println!("Downloading blocks {}..{} → {}/", s, e, output);
-            
+
             for i in s..=e {
-                let (block,): (Block,) = canister.query("get_block").with_arg(i).build().call().await
+                let (block,): (Block,) = canister
+                    .query("get_block")
+                    .with_arg(i)
+                    .build()
+                    .call()
+                    .await
                     .context(format!("get_block({}) failed", i))?;
-                
+
                 // create snapshot representation if we want, currently just dump serialize json
                 #[derive(Serialize)]
                 struct SnapBlock {
@@ -396,7 +492,7 @@ async fn main() -> Result<()> {
                     callers: block.callers.iter().map(|c| c.to_text()).collect(),
                     previous_hash: to_hex(&block.previous_hash),
                 };
-                
+
                 let file_path = PathBuf::from(output).join(format!("block-{}.json", i));
                 fs::write(file_path, serde_json::to_string_pretty(&snap)?)?;
             }
@@ -407,46 +503,64 @@ async fn main() -> Result<()> {
             let (mid,): (u64,) = canister.query("mid").build().call().await?;
             let (next,): (u64,) = canister.query("next").build().call().await?;
             println!("Before: first={} mid={} next={}", first, mid, next);
-            
-            let (result,): (Option<u64>,) = canister.update("rotate").build().call_and_wait().await?;
-            
+
+            let (result,): (Option<u64>,) =
+                canister.update("rotate").build().call_and_wait().await?;
+
             let (first2,): (u64,) = canister.query("first").build().call().await?;
             let (mid2,): (u64,) = canister.query("mid").build().call().await?;
             let (next2,): (u64,) = canister.query("next").build().call().await?;
             println!("After : first={} mid={} next={}", first2, mid2, next2);
-            
+
             if let Some(index) = result {
                 println!("Rotated. New first (deleted up to): {}", index);
             } else {
                 println!("Rotated. Secondary was empty; nothing deleted.");
             }
         }
-        Commands::Auth { command } => {
-            match command {
-                AuthCommands::List => {
-                    let (auths,): (Vec<Authorization>,) = canister.query("get_authorized").build().call().await?;
-                    if auths.is_empty() {
-                        println!("No authorized principals.");
-                        return Ok(());
-                    }
-                    for a in auths {
-                        let role = if a.auth == Auth::Admin { "Admin" } else { "User" };
-                        println!("  {}  [{}]", a.id.to_text(), role);
-                    }
+        Commands::Auth { command } => match command {
+            AuthCommands::List => {
+                let (auths,): (Vec<Authorization>,) =
+                    canister.query("get_authorized").build().call().await?;
+                if auths.is_empty() {
+                    println!("No authorized principals.");
+                    return Ok(());
                 }
-                AuthCommands::Add { principal, admin } => {
-                    let p = Principal::from_text(principal)?;
-                    let role = if *admin { Auth::Admin } else { Auth::User };
-                    let _: ((),) = canister.update("authorize").with_args((p, role)).build().call_and_wait().await?;
-                    println!("Authorized {} as {}", principal, if *admin { "Admin" } else { "User" });
-                }
-                AuthCommands::Remove { principal } => {
-                    let p = Principal::from_text(principal)?;
-                    let _: ((),) = canister.update("deauthorize").with_arg(p).build().call_and_wait().await?;
-                    println!("Deauthorized {}", principal);
+                for a in auths {
+                    let role = if a.auth == Auth::Admin {
+                        "Admin"
+                    } else {
+                        "User"
+                    };
+                    println!("  {}  [{}]", a.id.to_text(), role);
                 }
             }
-        }
+            AuthCommands::Add { principal, admin } => {
+                let p = Principal::from_text(principal)?;
+                let role = if *admin { Auth::Admin } else { Auth::User };
+                let _: ((),) = canister
+                    .update("authorize")
+                    .with_args((p, role))
+                    .build()
+                    .call_and_wait()
+                    .await?;
+                println!(
+                    "Authorized {} as {}",
+                    principal,
+                    if *admin { "Admin" } else { "User" }
+                );
+            }
+            AuthCommands::Remove { principal } => {
+                let p = Principal::from_text(principal)?;
+                let _: ((),) = canister
+                    .update("deauthorize")
+                    .with_arg(p)
+                    .build()
+                    .call_and_wait()
+                    .await?;
+                println!("Deauthorized {}", principal);
+            }
+        },
         Commands::Snapshot { start, end, output } => {
             let (first,): (u64,) = canister.query("first").build().call().await?;
             let (next,): (u64,) = canister.query("next").build().call().await?;
@@ -456,12 +570,14 @@ async fn main() -> Result<()> {
             }
             let s = start.unwrap_or(first);
             let e = end.unwrap_or(next.saturating_sub(1));
-            
+
             let ts = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S%.3fZ");
-            let out_file = output.clone().unwrap_or_else(|| format!("blockchain-{}.json", ts));
-            
+            let out_file = output
+                .clone()
+                .unwrap_or_else(|| format!("blockchain-{}.json", ts));
+
             println!("Snapshotting blocks {}..{} → {}", s, e, out_file);
-            
+
             #[derive(Serialize)]
             struct SnapBlock {
                 index: u64,
@@ -471,7 +587,7 @@ async fn main() -> Result<()> {
                 callers: Vec<String>,
                 previous_hash: String,
             }
-            
+
             #[derive(Serialize)]
             struct Snapshot {
                 version: u32,
@@ -483,7 +599,7 @@ async fn main() -> Result<()> {
                 next: u64,
                 blocks: Vec<SnapBlock>,
             }
-            
+
             let root_key = agent.read_root_key();
             let mut snap = Snapshot {
                 version: 1,
@@ -495,11 +611,16 @@ async fn main() -> Result<()> {
                 next,
                 blocks: Vec::new(),
             };
-            
+
             for i in s..=e {
-                let (block,): (Block,) = canister.query("get_block").with_arg(i).build().call().await
+                let (block,): (Block,) = canister
+                    .query("get_block")
+                    .with_arg(i)
+                    .build()
+                    .call()
+                    .await
                     .context(format!("get_block({}) failed", i))?;
-                    
+
                 snap.blocks.push(SnapBlock {
                     index: i,
                     certificate: to_hex(&block.certificate),
@@ -509,11 +630,17 @@ async fn main() -> Result<()> {
                     previous_hash: to_hex(&block.previous_hash),
                 });
             }
-            
+
             fs::write(&out_file, serde_json::to_string_pretty(&snap)?)?;
             println!("{} block(s) saved to {}", snap.blocks.len(), out_file);
         }
-        Commands::Verify { path, start, end, no_chain, root_key } => {
+        Commands::Verify {
+            path,
+            start,
+            end,
+            no_chain,
+            root_key,
+        } => {
             println!("Verification is currently rudimentary offline.");
             // Live chain verification fallback setup (since local file loading needs extra parsing logic like JS)
             if path.is_none() {
@@ -521,18 +648,26 @@ async fn main() -> Result<()> {
                 let (next,): (u64,) = canister.query("next").build().call().await?;
                 let s = start.unwrap_or(first);
                 let e = end.unwrap_or(next.saturating_sub(1));
-                
+
                 println!("Verifying live chain: blocks {}..{}", s, e);
                 let mut pass = 0;
                 let mut fail = 0;
                 let _root_key = agent.read_root_key();
                 for i in s..=e {
-                    let (block,): (Block,) = canister.query("get_block").with_arg(i).build().call().await
+                    let (block,): (Block,) = canister
+                        .query("get_block")
+                        .with_arg(i)
+                        .build()
+                        .call()
+                        .await
                         .context(format!("get_block({}) failed", i))?;
-                    
+
                     print!("  Block {}: ", i);
                     match verify_block(&block) {
-                        Ok(_) => { println!("OK"); pass += 1; },
+                        Ok(_) => {
+                            println!("OK");
+                            pass += 1;
+                        }
                         Err(errors) => {
                             println!("FAIL");
                             for err in errors {
@@ -542,7 +677,12 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-                println!("\nResult: {} OK, {} FAIL  ({} block(s))", pass, fail, e - s + 1);
+                println!(
+                    "\nResult: {} OK, {} FAIL  ({} block(s))",
+                    pass,
+                    fail,
+                    e - s + 1
+                );
             } else {
                 println!("Local file verification requires more JSON parsing setup. Only live chain verification is supported in this iteration.");
             }
@@ -552,10 +692,8 @@ async fn main() -> Result<()> {
         }
     }
 
-    
     Ok(())
 }
-
 
 async fn safe_append(canister: &Canister<'_>, entries: Vec<Vec<u8>>) -> Result<u64> {
     // Commit any previously staged data before staging ours
@@ -563,31 +701,59 @@ async fn safe_append(canister: &Canister<'_>, entries: Vec<Vec<u8>>) -> Result<u
     if let Some(cert) = pending {
         if !cert.is_empty() {
             println!("Note: committing previously staged data first…");
-            let (committed,): (Option<u64>,) = canister.update("commit").with_arg(cert).build().call_and_wait().await?;
+            let (committed,): (Option<u64>,) = canister
+                .update("commit")
+                .with_arg(cert)
+                .build()
+                .call_and_wait()
+                .await?;
             if let Some(index) = committed {
                 println!("  Committed pending block at index {}", index);
             } else {
-                println!("  Warning: commit returned None (stale certificate, staged data discarded)");
+                println!(
+                    "  Warning: commit returned None (stale certificate, staged data discarded)"
+                );
             }
         }
     }
 
-    println!("Staging {} entr{}…", entries.len(), if entries.len() == 1 { "y" } else { "ies" });
+    println!(
+        "Staging {} entr{}…",
+        entries.len(),
+        if entries.len() == 1 { "y" } else { "ies" }
+    );
     let mut certified: Option<Vec<u8>> = None;
-    
+
     // Call prepare
-    match canister.update("prepare").with_arg(&entries).build().call_and_wait().await {
+    match canister
+        .update("prepare")
+        .with_arg(&entries)
+        .build()
+        .call_and_wait()
+        .await
+    {
         Ok((cert,)) => {
             certified = Some(cert);
         }
         Err(e) => {
             // Concurrent prepare raced us — commit the other writer's data then retry
-            let (cert2,): (Option<Vec<u8>>,) = canister.query("get_certificate").build().call().await?;
+            let (cert2,): (Option<Vec<u8>>,) =
+                canister.query("get_certificate").build().call().await?;
             if let Some(c2) = cert2 {
                 if !c2.is_empty() {
                     println!("  Race detected; committing concurrent staged data and retrying…");
-                    let _: ((),) = canister.update("commit").with_arg(c2).build().call_and_wait().await?;
-                    let (cert3,): (Vec<u8>,) = canister.update("prepare").with_arg(&entries).build().call_and_wait().await
+                    let _: ((),) = canister
+                        .update("commit")
+                        .with_arg(c2)
+                        .build()
+                        .call_and_wait()
+                        .await?;
+                    let (cert3,): (Vec<u8>,) = canister
+                        .update("prepare")
+                        .with_arg(&entries)
+                        .build()
+                        .call_and_wait()
+                        .await
                         .context("Retry prepare failed")?;
                     certified = Some(cert3);
                 } else {
@@ -598,16 +764,24 @@ async fn safe_append(canister: &Canister<'_>, entries: Vec<Vec<u8>>) -> Result<u
             }
         }
     }
-    
+
     let cert_hex = to_hex(certified.as_ref().unwrap());
-    println!("  certified_data: {}...", &cert_hex.chars().take(32).collect::<String>());
+    println!(
+        "  certified_data: {}...",
+        &cert_hex.chars().take(32).collect::<String>()
+    );
 
     let (cert,): (Option<Vec<u8>>,) = canister.query("get_certificate").build().call().await?;
     let cert = cert.context("get_certificate() returned None after prepare()")?;
 
-    let (result,): (Option<u64>,) = canister.update("commit").with_arg(cert).build().call_and_wait().await?;
+    let (result,): (Option<u64>,) = canister
+        .update("commit")
+        .with_arg(cert)
+        .build()
+        .call_and_wait()
+        .await?;
     let index = result.context("commit() returned None after certificate obtained")?;
-    
+
     Ok(index)
 }
 
@@ -615,35 +789,81 @@ async fn safe_append(canister: &Canister<'_>, entries: Vec<Vec<u8>>) -> Result<u
 
 // Continued below via multi_replace
 
-fn verify_block(
-    block: &Block,
-) -> Result<(), Vec<String>> {
-    let _errors: Vec<String> = Vec::new();
+fn verify_block(block: &Block) -> Result<(), Vec<String>> {
+    let mut errors: Vec<String> = Vec::new();
 
-    // The signature and certified variables logic of IC blockchain uses deeply nested hash trees 
-    // and older versions of `ic-certified-map` have unstable `lookup_path` and `lookup` bindings
-    // because `&[u8]` vs `Label` vs `GenericArray`. 
-    // To achieve feature parity with Node.js `icb verify`, we'd need to either use an JS engine 
-    // to run the verification or write a very robust state-machine tree traverser.
-    // For the initial Rust CLI iteration, offline verification is a stub, as discussed in the plan.
-    
-    // We can at least check entry hashes
+    // Decode the tree inside the block
+    let block_tree: HashTree = match serde_cbor::from_slice(&block.tree) {
+        Ok(t) => t,
+        Err(e) => {
+            errors.push(format!(
+                "Failed to parse block.tree as CBOR HashTree: {}",
+                e
+            ));
+            return Err(errors);
+        }
+    };
+
+    // 1. Entry hashes in Merkle tree
     for (i, data) in block.data.iter().enumerate() {
-        let caller = block.callers.get(i).map(|c| c.as_slice()).unwrap_or(&[]);
-        let _expected = {
-            let caller_hash = sha256bytes(caller);
-            let data_hash = sha256bytes(data);
-            let mut hasher = Sha256::new();
-            hasher.update(caller_hash);
-            hasher.update(data_hash);
-            hasher.finalize()
-        };
-        // Can't compare to tree without tree parser, so just dry-run the hashes to ensure they process.
+        // Construct the 4-byte big-endian key for the index
+        let key = (i as u32).to_be_bytes();
+
+        let mut path_iter = vec![Label::from("certified_blocks"), Label::from(key.to_vec())];
+
+        let found = block_tree.lookup_path(path_iter.iter());
+        match found {
+            LookupResult::Found(tree_hash) => {
+                let caller = block.callers.get(i).map(|c| c.as_slice()).unwrap_or(&[]);
+                let caller_hash = sha256bytes(caller);
+                let data_hash = sha256bytes(data);
+                let mut hasher = Sha256::new();
+                hasher.update(caller_hash);
+                hasher.update(data_hash);
+                let expected = hasher.finalize();
+
+                if tree_hash != expected.as_slice() {
+                    errors.push(format!("entry[{}] hash mismatch in tree", i));
+                }
+            }
+            _ => {
+                errors.push(format!("entry[{}] not found in tree", i));
+            }
+        }
     }
 
-    if _errors.is_empty() {
+    // 2. previous_hash field matches certified value in tree
+    let mut ph_path = vec![
+        Label::from("certified_blocks"),
+        Label::from("previous_hash"),
+    ];
+    let found_ph = block_tree.lookup_path(ph_path.iter());
+    match found_ph {
+        LookupResult::Found(tree_ph) => {
+            if tree_ph != block.previous_hash {
+                errors.push("previous_hash in tree != block.previous_hash".to_string());
+            }
+        }
+        _ => {
+            errors.push("previous_hash not found in tree".to_string());
+        }
+    }
+
+    // 3. (Partial) Signature Verification
+    // Deep offline cryptographic verification of the exact BLS signature requires ic-certification or
+    // raw threshold signature operations which ic-agent abstracts away. Since ic-agent's
+    // `Certificate::create` validator expects network data payloads (like timestamp + delegation trees)
+    // mapping these directly to offline snapshots requires bypassing the `ic-agent` cert verifier.
+    // For now, the user's Node CLI delegates this to `@dfinity/agent` which handles the tree reconstruction.
+    // Rust's `ic_agent::Certificate` doesn't have an offline constructor taking solely tree bytes
+    // as easily without full `Delegation` structs.
+    // The previous checks (Hash tree consistency, previous_hash matching, and block content hashing)
+    // represent data integrity validating the *block consistency itself*, but we stop short of
+    // validating the raw system subnet threshold signature locally.
+
+    if errors.is_empty() {
         Ok(())
     } else {
-        Err(_errors)
+        Err(errors)
     }
 }
