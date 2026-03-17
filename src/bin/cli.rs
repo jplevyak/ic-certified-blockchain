@@ -287,8 +287,9 @@ fn resolve_canister_id(override_id: Option<String>) -> Result<Principal> {
     }
     anyhow::bail!("canister ID not found — set IC_CANISTER_ID in .env or run dfx deploy first")
 }
+use std::sync::Arc;
 
-fn load_identity(file: Option<String>) -> Result<Option<ic_agent::identity::Secp256k1Identity>> {
+fn load_identity(file: Option<String>) -> Result<Option<Arc<dyn ic_agent::Identity>>> {
     let f = match file {
         Some(f) => f,
         None => match std::env::var("IC_IDENTITY_FILE") {
@@ -310,9 +311,15 @@ fn load_identity(file: Option<String>) -> Result<Option<ic_agent::identity::Secp
         anyhow::bail!("identity file not found: {}", resolved.display());
     }
 
-    let identity = ic_agent::identity::Secp256k1Identity::from_pem_file(&resolved)
-        .context("unsupported identity format (expected secp256k1 SEC1)")?;
-    Ok(Some(identity))
+    if let Ok(identity) = ic_agent::identity::Secp256k1Identity::from_pem_file(&resolved) {
+        return Ok(Some(Arc::new(identity)));
+    }
+
+    if let Ok(identity) = ic_agent::identity::BasicIdentity::from_pem_file(&resolved) {
+        return Ok(Some(Arc::new(identity)));
+    }
+
+    anyhow::bail!("unsupported identity format (expected secp256k1 SEC1 or ed25519) from {:?}", resolved);
 }
 
 async fn make_agent(cli: &Cli) -> Result<(Agent, Principal)> {
@@ -320,8 +327,8 @@ async fn make_agent(cli: &Cli) -> Result<(Agent, Principal)> {
 
     let mut builder = Agent::builder().with_url(&cli.network);
 
-    if let Some(identity) = load_identity(cli.identity.clone())? {
-        builder = builder.with_identity(identity);
+    if let Some(id) = load_identity(cli.identity.clone())? {
+        builder = builder.with_arc_identity(id);
     }
 
     let agent = builder.build()?;

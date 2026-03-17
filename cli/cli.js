@@ -19,6 +19,7 @@ import sha256lib from 'sha256';
 import { IDL } from '@icp-sdk/core/candid';
 import { Principal } from '@icp-sdk/core/principal';
 import { Secp256k1KeyIdentity } from '@icp-sdk/core/identity/secp256k1';
+import { Ed25519KeyIdentity } from '@icp-sdk/core/identity';
 import {
   Actor, Cbor, Certificate, HttpAgent, lookup_path, reconstruct,
 } from '@icp-sdk/core/agent';
@@ -167,12 +168,46 @@ function loadIdentity(file) {
     : path.isAbsolute(f) ? f : path.join(__dirname, f);
   if (!fs.existsSync(resolved)) die(`identity file not found: ${resolved}`);
   const pem = fs.readFileSync(resolved);
-  const keyObj = crypto.createPrivateKey({ key: pem, format: 'pem' });
-  const der = keyObj.export({ format: 'der', type: 'sec1' });
-  const PREFIX = Buffer.from([0x30, 0x74, 0x02, 0x01, 0x01, 0x04, 0x20]);
-  if (!Buffer.from(der).subarray(0, 7).equals(PREFIX))
-    die('unsupported identity format (expected secp256k1 SEC1 — use: dfx identity export <name>)');
-  return Secp256k1KeyIdentity.fromSecretKey(new Uint8Array(der.slice(7, 39)));
+
+  // Need to structure parsing around the potential crypto error
+  let keyObj = null;
+  try {
+      keyObj = crypto.createPrivateKey({ key: pem, format: 'pem' });
+  } catch (e) {
+      // Ignored initially; Node rejects ed25519 v1
+  }
+
+  if (keyObj) {
+      try {
+        const derSec1 = keyObj.export({ format: 'der', type: 'sec1' });
+        const PREFIX_SEC1 = Buffer.from([0x30, 0x74, 0x02, 0x01, 0x01, 0x04, 0x20]);
+        if (Buffer.from(derSec1).subarray(0, 7).equals(PREFIX_SEC1)) {
+          return Secp256k1KeyIdentity.fromSecretKey(new Uint8Array(derSec1.slice(7, 39)));
+        }
+      } catch (e) { /* ignore */ }
+
+      try {
+        const derPkcs8 = keyObj.export({ format: 'der', type: 'pkcs8' });
+        const PREFIX_ED25519 = Buffer.from([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20]);
+        if (Buffer.from(derPkcs8).subarray(0, 16).equals(PREFIX_ED25519)) {
+           const seed = derPkcs8.slice(16, 48);
+           return Ed25519KeyIdentity.fromSecretKey(new Uint8Array(seed));
+        }
+      } catch (e) { /* ignore */ }
+  }
+
+  // Try raw Base64 manual extraction for legacy dfx PKCS#8 v1 Ed25519 identities (which Node crypto rejects)
+  try {
+    const b64 = pem.toString('utf8').replace(/-----.*?-----/g, '').replace(/\s+/g, '');
+    const derRaw = Buffer.from(b64, 'base64');
+    const PREFIX_ED25519_V1 = Buffer.from([0x30, 0x53, 0x02, 0x01, 0x01, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20]);
+    if (derRaw.subarray(0, 16).equals(PREFIX_ED25519_V1)) {
+        const seed = derRaw.subarray(16, 48); // 32 byte seed is immediately after the 16 byte header
+        return Ed25519KeyIdentity.fromSecretKey(new Uint8Array(seed));
+    }
+  } catch (e) { /* ignore */ }
+
+  die('unsupported identity format (expected secp256k1 SEC1 or ed25519 PKCS8 — use: dfx identity export <name>)');
 }
 
 async function makeActor(globalOpts) {
