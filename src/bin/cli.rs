@@ -44,6 +44,60 @@ enum Auth {
     Admin,
 }
 
+// ── Snapshot Serialization ───────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize)]
+struct SnapBlock {
+    index: u64,
+    certificate: String,
+    tree: String,
+    data: Vec<String>,
+    callers: Vec<String>,
+    previous_hash: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Snapshot {
+    version: u32,
+    #[serde(rename = "canisterId")]
+    canister_id: String,
+    #[serde(rename = "rootKey")]
+    root_key: String,
+    network: String,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    first: u64,
+    next: u64,
+    blocks: Vec<SnapBlock>,
+}
+
+fn snap_to_block(snap: &SnapBlock) -> Result<Block> {
+    let mut data = Vec::new();
+    for d in &snap.data {
+        data.push(from_hex(d)?);
+    }
+
+    let mut callers = Vec::new();
+    for c in &snap.callers {
+        callers.push(Principal::from_text(c)?);
+    }
+
+    let mut ph = [0u8; 32];
+    let ph_vec = from_hex(&snap.previous_hash)?;
+    if ph_vec.len() != 32 {
+        anyhow::bail!("invalid previous_hash length");
+    }
+    ph.copy_from_slice(&ph_vec);
+
+    Ok(Block {
+        certificate: from_hex(&snap.certificate)?,
+        tree: from_hex(&snap.tree)?,
+        data,
+        callers,
+        previous_hash: ph,
+    })
+}
+
 // ── CLI Setup ────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
@@ -484,15 +538,6 @@ async fn main() -> Result<()> {
                     .context(format!("get_block({}) failed", i))?;
 
                 // create snapshot representation if we want, currently just dump serialize json
-                #[derive(Serialize)]
-                struct SnapBlock {
-                    index: u64,
-                    certificate: String,
-                    tree: String,
-                    data: Vec<String>,
-                    callers: Vec<String>,
-                    previous_hash: String,
-                }
                 let snap = SnapBlock {
                     index: i,
                     certificate: to_hex(&block.certificate),
@@ -587,31 +632,6 @@ async fn main() -> Result<()> {
 
             println!("Snapshotting blocks {}..{} → {}", s, e, out_file);
 
-            #[derive(Serialize)]
-            struct SnapBlock {
-                index: u64,
-                certificate: String,
-                tree: String,
-                data: Vec<String>,
-                callers: Vec<String>,
-                previous_hash: String,
-            }
-
-            #[derive(Serialize)]
-            struct Snapshot {
-                version: u32,
-                #[serde(rename = "canisterId")]
-                canister_id: String,
-                #[serde(rename = "rootKey")]
-                root_key: String,
-                network: String,
-                #[serde(rename = "createdAt")]
-                created_at: String,
-                first: u64,
-                next: u64,
-                blocks: Vec<SnapBlock>,
-            }
-
             let root_key = agent.read_root_key();
             let mut snap = Snapshot {
                 version: 1,
@@ -650,11 +670,15 @@ async fn main() -> Result<()> {
             path,
             start,
             end,
-            no_chain: _,
+            no_chain,
             root_key: _,
         } => {
-            println!("Verification is currently rudimentary offline.");
-            // Live chain verification fallback setup (since local file loading needs extra parsing logic like JS)
+            // ── Live chain vs Local file ─────────────────────────────────────────────
+            let mut records: Vec<(u64, Block)> = Vec::new();
+            // Optional metadata loaded from files
+            let mut _file_canister_id: Option<String> = None;
+            let mut _file_root_key: Option<Vec<u8>> = None;
+
             if path.is_none() {
                 let (first,): (u64,) = canister.query("first").build().call().await?;
                 let (next,): (u64,) = canister.query("next").build().call().await?;
@@ -662,9 +686,6 @@ async fn main() -> Result<()> {
                 let e = end.unwrap_or(next.saturating_sub(1));
 
                 println!("Verifying live chain: blocks {}..{}", s, e);
-                let mut pass = 0;
-                let mut fail = 0;
-                let _root_key = agent.read_root_key();
                 for i in s..=e {
                     let (block,): (Block,) = canister
                         .query("get_block")
@@ -673,31 +694,131 @@ async fn main() -> Result<()> {
                         .call()
                         .await
                         .context(format!("get_block({}) failed", i))?;
+                    records.push((i, block));
+                }
+            } else {
+                let input_path = path.as_ref().unwrap();
+                let p = PathBuf::from(input_path);
+                if !p.exists() {
+                    anyhow::bail!("not found: {}", input_path);
+                }
 
-                    print!("  Block {}: ", i);
-                    match verify_block(&block) {
-                        Ok(_) => {
-                            println!("OK");
-                            pass += 1;
-                        }
-                        Err(errors) => {
-                            println!("FAIL");
-                            for err in errors {
-                                println!("    ! {}", err);
-                            }
-                            fail += 1;
+                if p.is_dir() {
+                    let mut files = Vec::new();
+                    for entry in fs::read_dir(&p)? {
+                        let entry = entry?;
+                        let file_name = entry.file_name().into_string().unwrap_or_default();
+                        if file_name.starts_with("block-") && file_name.ends_with(".json") {
+                            files.push(entry.path());
                         }
                     }
+                    if files.is_empty() {
+                        anyhow::bail!("no block-*.json files found in {}", input_path);
+                    }
+
+                    files.sort_by_cached_key(|f| {
+                        let name = f.file_stem().unwrap().to_str().unwrap();
+                        let num_str = name.strip_prefix("block-").unwrap_or("0");
+                        num_str.parse::<u64>().unwrap_or(0)
+                    });
+
+                    for f in files {
+                        let content = fs::read_to_string(&f)?;
+                        let obj: SnapBlock = serde_json::from_str(&content)?;
+                        if let Ok(b) = snap_to_block(&obj) {
+                            records.push((obj.index, b));
+                        }
+                    }
+
+                    let s = start.unwrap_or(records.first().map(|r| r.0).unwrap_or(0));
+                    let e = end.unwrap_or(records.last().map(|r| r.0).unwrap_or(0));
+                    records.retain(|&(idx, _)| idx >= s && idx <= e);
+                    println!("Verifying directory {} ({} block(s), indices {}..{})", input_path, records.len(), s, e);
+                } else {
+                    let content = fs::read_to_string(&p)?;
+                    // Try parsing as Snapshot first
+                    if let Ok(snap) = serde_json::from_str::<Snapshot>(&content) {
+                        if snap.canister_id.is_empty() {
+                            anyhow::bail!("snapshot missing canisterId");
+                        }
+                        if snap.root_key.is_empty() {
+                            anyhow::bail!("snapshot missing rootKey");
+                        }
+                        _file_canister_id = Some(snap.canister_id.clone());
+                        _file_root_key = Some(from_hex(&snap.root_key)?);
+
+                        let s = start.unwrap_or(snap.first);
+                        let e = end.unwrap_or(snap.next.saturating_sub(1));
+
+                        for b in snap.blocks {
+                            if b.index >= s && b.index <= e {
+                                if let Ok(block) = snap_to_block(&b) {
+                                    records.push((b.index, block));
+                                }
+                            }
+                        }
+                        println!("Verifying snapshot {} (blocks {}..{})", input_path, s, e);
+                    } else if let Ok(obj) = serde_json::from_str::<SnapBlock>(&content) {
+                        // Single block fallback
+                        if let Ok(block) = snap_to_block(&obj) {
+                            records.push((obj.index, block));
+                        }
+                        println!("Verifying block file {}", input_path);
+                    } else {
+                        anyhow::bail!("unrecognised file format: {}", input_path);
+                    }
                 }
-                println!(
-                    "\nResult: {} OK, {} FAIL  ({} block(s))",
-                    pass,
-                    fail,
-                    e - s + 1
-                );
-            } else {
-                println!("Local file verification requires more JSON parsing setup. Only live chain verification is supported in this iteration.");
             }
+
+            if records.is_empty() {
+                println!("No blocks in range.");
+                return Ok(());
+            }
+
+            let mut pass = 0;
+            let mut fail = 0;
+
+            for (index, block) in &records {
+                print!("  Block {}: ", index);
+                match verify_block(block) {
+                    Ok(_) => {
+                        println!("OK");
+                        pass += 1;
+                    }
+                    Err(errors) => {
+                        println!("FAIL");
+                        for err in errors {
+                            println!("    ! {}", err);
+                        }
+                        fail += 1;
+                    }
+                }
+            }
+
+            if !*no_chain {
+                println!("Checking hash chain…");
+                let chain_issues = verify_chain_hashes(&records)?;
+                if chain_issues.is_empty() {
+                    println!("  Hash chain: OK");
+                } else {
+                    for issue in chain_issues {
+                        println!("  ! {}", issue);
+                        fail += 1;
+                    }
+                }
+            }
+
+            println!(
+                "\nResult: {} OK, {} FAIL  ({} block(s))",
+                pass,
+                fail,
+                records.len()
+            );
+
+            if fail > 0 {
+                std::process::exit(1);
+            }
+            println!("Verification complete.");
         }
     }
 
@@ -797,6 +918,49 @@ async fn safe_append(canister: &Canister<'_>, entries: Vec<Vec<u8>>) -> Result<u
 // Add to the main match statement logic via sed in next step
 
 // Continued below via multi_replace
+
+// ── Block verification ───────────────────────────────────────────────────────
+
+fn block_hash(block: &Block) -> Result<[u8; 32]> {
+    let enc = candid::encode_one(block)?;
+    Ok(sha256bytes(&enc))
+}
+
+fn verify_chain_hashes(records: &[(u64, Block)]) -> Result<Vec<String>> {
+    let mut issues = Vec::new();
+    if records.is_empty() {
+        return Ok(issues);
+    }
+
+    let first_ph = &records[0].1.previous_hash;
+    if !first_ph.iter().all(|&b| b == 0) {
+        println!("  Note: block {} has non-zero previous_hash (chain continuation from prior segment)", records[0].0);
+    }
+
+    for i in 1..records.len() {
+        if records[i].0 != records[i - 1].0 + 1 {
+            continue; // non-contiguous range, skip
+        }
+
+        let actual_ph = &records[i].1.previous_hash;
+        if actual_ph.iter().all(|&b| b == 0) {
+            println!("  Note: block {} previous_hash is zero (rotation boundary — chain restarted)", records[i].0);
+            continue;
+        }
+
+        let expected_ph = block_hash(&records[i - 1].1)?;
+        if actual_ph != &expected_ph {
+            issues.push(format!(
+                "Block {}: previous_hash mismatch (expected {}… got {}…)",
+                records[i].0,
+                to_hex(&expected_ph).chars().take(16).collect::<String>(),
+                to_hex(actual_ph).chars().take(16).collect::<String>()
+            ));
+        }
+    }
+
+    Ok(issues)
+}
 
 fn verify_block(block: &Block) -> Result<(), Vec<String>> {
     let mut errors: Vec<String> = Vec::new();
