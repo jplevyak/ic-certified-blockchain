@@ -13,6 +13,11 @@ use std::path::PathBuf;
 mod hash_tree;
 use hash_tree::{HashTree, Label, LookupResult};
 
+use ic_certificate_verification::VerifyCertificate;
+use ic_certification::Certificate;
+use ic_cbor::CertificateToCbor;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 // We parse the exact same structure as the replica certificate
 #[allow(dead_code)]
 #[derive(Deserialize)]
@@ -399,8 +404,9 @@ async fn main() -> Result<()> {
             }
 
             if *verify {
-                match verify_block(&block) {
-                    Ok(_) => println!("Verification successful: tree and hashes are internally consistent."),
+                let rk = agent.read_root_key();
+                match verify_block(&block, canister_id, &rk) {
+                    Ok(_) => println!("Verification successful: valid BLS signature and internally consistent."),
                     Err(errors) => {
                         println!("Verification failed:");
                         for err in errors {
@@ -778,9 +784,12 @@ async fn main() -> Result<()> {
             let mut pass = 0;
             let mut fail = 0;
 
+            let rk_file = _file_root_key.unwrap_or_else(|| agent.read_root_key());
+            let cid_file = _file_canister_id.and_then(|c| Principal::from_text(&c).ok()).unwrap_or(canister_id);
+
             for (index, block) in &records {
                 print!("  Block {}: ", index);
-                match verify_block(block) {
+                match verify_block(block, cid_file, &rk_file) {
                     Ok(_) => {
                         println!("OK");
                         pass += 1;
@@ -962,7 +971,11 @@ fn verify_chain_hashes(records: &[(u64, Block)]) -> Result<Vec<String>> {
     Ok(issues)
 }
 
-fn verify_block(block: &Block) -> Result<(), Vec<String>> {
+fn verify_block(
+    block: &Block,
+    canister_id: Principal,
+    root_key: &[u8],
+) -> Result<(), Vec<String>> {
     let mut errors: Vec<String> = Vec::new();
 
     // Decode the tree inside the block
@@ -1020,17 +1033,30 @@ fn verify_block(block: &Block) -> Result<(), Vec<String>> {
         }
     }
 
-    // 3. (Partial) Signature Verification
-    // Deep offline cryptographic verification of the exact BLS signature requires ic-certification or
-    // raw threshold signature operations which ic-agent abstracts away. Since ic-agent's
-    // `Certificate::create` validator expects network data payloads (like timestamp + delegation trees)
-    // mapping these directly to offline snapshots requires bypassing the `ic-agent` cert verifier.
-    // For now, the user's Node CLI delegates this to `@dfinity/agent` which handles the tree reconstruction.
-    // Rust's `ic_agent::Certificate` doesn't have an offline constructor taking solely tree bytes
-    // as easily without full `Delegation` structs.
-    // The previous checks (Hash tree consistency, previous_hash matching, and block content hashing)
-    // represent data integrity validating the *block consistency itself*, but we stop short of
-    // validating the raw system subnet threshold signature locally.
+    // 3. Cryptographic Signature Verification
+    // Use ic-certificate-verification to validate the subnet BLS signature against our root_key
+    match Certificate::from_cbor(&block.certificate) {
+        Ok(cert) => {
+            let current_time_ns = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let max_cert_time_offset_ns = u128::MAX; // Unlimited time for offline snapshots
+
+            if let Err(e) = VerifyCertificate::<()>::verify(
+                &cert,
+                canister_id.as_slice(),
+                root_key,
+                &current_time_ns,
+                &max_cert_time_offset_ns,
+            ) {
+                errors.push(format!("BLS signature validation failed: {:?}", e));
+            }
+        }
+        Err(e) => {
+            errors.push(format!("Failed to parse block.certificate as CBOR: {}", e));
+        }
+    };
 
     if errors.is_empty() {
         Ok(())
