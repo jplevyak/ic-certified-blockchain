@@ -23,3 +23,22 @@ sha2 = "^0.10"
 debug = false
 lto = true
 opt-level = 'z'
+
+[[bin]]
+name = "cli"
+path = "src/bin/cli.rs"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+anyhow = "1.0.102"
+candid = "0.10"
+clap = { version = "4.5", features = ["derive", "env"] }
+dotenvy = "0.15"
+hex = "0.4"
+ic-agent = "0.46.2"
+ic-certified-map = "0.4"
+ic-certification = "3"
+ic-utils = "0.46.2"
+serde_json = "1.0"
+sha2 = "0.10"
+tokio = { version = "1.37", features = ["full"] }
+chrono = "0.4"
