@@ -28,10 +28,6 @@ opt-level = 'z'
 name = "cli"
 path = "src/bin/cli.rs"
 
-[[bin]]
-name = "scratch"
-path = "src/bin/scratch.rs"
-
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 anyhow = "1.0.102"
 candid = "0.10"

@@ -103,6 +103,35 @@ fn snap_to_block(snap: &SnapBlock) -> Result<Block> {
     })
 }
 
+fn block_to_snap(index: u64, block: &Block) -> SnapBlock {
+    SnapBlock {
+        index,
+        certificate: to_hex(&block.certificate),
+        tree: to_hex(&block.tree),
+        data: block.data.iter().map(|d| to_hex(d)).collect(),
+        callers: block.callers.iter().map(|c| c.to_text()).collect(),
+        previous_hash: to_hex(&block.previous_hash),
+    }
+}
+
+fn fmt_data(data: &[u8]) -> String {
+    if let Ok(s) = std::str::from_utf8(data) {
+        if s.chars().all(|c| {
+            let n = c as u32;
+            n == 0x09 || n == 0x0A || n == 0x0D || (0x20..=0x7E).contains(&n)
+        }) {
+            return format!("\"{}\"", s.replace('\n', "\\n").replace('\r', "\\r"));
+        }
+    }
+
+    let hex = to_hex(data);
+    let mut trunc = hex.chars().take(32).collect::<String>();
+    if data.len() > 16 {
+        trunc.push('…');
+    }
+    format!("<{} bytes 0x{}>", data.len(), trunc)
+}
+
 // ── CLI Setup ────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
@@ -363,7 +392,8 @@ async fn main() -> Result<()> {
                 .context(format!("get_block({}) failed", index))?;
 
             if *raw {
-                let json = serde_json::to_string_pretty(&block)?;
+                let snap = block_to_snap(*index, &block);
+                let json = serde_json::to_string_pretty(&snap)?;
                 println!("{}", json);
                 return Ok(());
             }
@@ -383,7 +413,7 @@ async fn main() -> Result<()> {
                     .unwrap_or_default();
                 println!("  entry[{}]", i);
                 println!("    caller : {}", caller);
-                println!("    data   : <{} bytes>", data.len());
+                println!("    data   : {}", fmt_data(data));
                 if *verbose {
                     println!("    sha256 : {}", to_hex(&sha256bytes(data)));
                 }
