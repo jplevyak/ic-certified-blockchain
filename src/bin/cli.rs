@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use candid::{CandidType, Decode, Deserialize, Encode, Principal};
+use candid::{CandidType, Deserialize, Principal};
 use clap::{Parser, Subcommand};
 use dotenvy::dotenv;
 use ic_agent::{export::Principal as AgentPrincipal, Agent};
@@ -7,13 +7,14 @@ use ic_utils::{call::SyncCall, canister::CanisterBuilder, Canister};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[path = "../hash_tree.rs"]
 mod hash_tree;
 use hash_tree::{HashTree, Label, LookupResult};
 
 // We parse the exact same structure as the replica certificate
+#[allow(dead_code)]
 #[derive(Deserialize)]
 struct ReplicaCertificate<'a> {
     #[serde(borrow)]
@@ -204,15 +205,15 @@ fn load_identity(file: Option<String>) -> Result<Option<ic_agent::identity::Secp
     };
 
     // Resolve path
-    let resolved = if f.starts_with('~') {
+    let resolved = if let Some(stripped) = f.strip_prefix('~') {
         let home = std::env::var("HOME").unwrap_or_default();
-        let stripped = f.strip_prefix("~/").unwrap_or(&f[1..]);
+        let stripped = f.strip_prefix("~/").unwrap_or(stripped);
         PathBuf::from(home).join(stripped)
     } else {
         PathBuf::from(f)
     };
 
-    if (!resolved.exists()) {
+    if !resolved.exists()  {
         anyhow::bail!("identity file not found: {}", resolved.display());
     }
 
@@ -591,10 +592,13 @@ async fn main() -> Result<()> {
             #[derive(Serialize)]
             struct Snapshot {
                 version: u32,
-                canisterId: String,
-                rootKey: String,
+                #[serde(rename = "canisterId")]
+                canister_id: String,
+                #[serde(rename = "rootKey")]
+                root_key: String,
                 network: String,
-                createdAt: String,
+                #[serde(rename = "createdAt")]
+                created_at: String,
                 first: u64,
                 next: u64,
                 blocks: Vec<SnapBlock>,
@@ -603,10 +607,10 @@ async fn main() -> Result<()> {
             let root_key = agent.read_root_key();
             let mut snap = Snapshot {
                 version: 1,
-                canisterId: canister_id.to_text(),
-                rootKey: to_hex(&root_key),
+                canister_id: canister_id.to_text(),
+                root_key: to_hex(&root_key),
                 network: cli.network.clone(),
-                createdAt: chrono::Utc::now().to_rfc3339(),
+                created_at: chrono::Utc::now().to_rfc3339(),
                 first,
                 next,
                 blocks: Vec::new(),
@@ -638,8 +642,8 @@ async fn main() -> Result<()> {
             path,
             start,
             end,
-            no_chain,
-            root_key,
+            no_chain: _,
+            root_key: _,
         } => {
             println!("Verification is currently rudimentary offline.");
             // Live chain verification fallback setup (since local file loading needs extra parsing logic like JS)
@@ -687,9 +691,6 @@ async fn main() -> Result<()> {
                 println!("Local file verification requires more JSON parsing setup. Only live chain verification is supported in this iteration.");
             }
         }
-        _ => {
-            println!("Command not fully implemented yet in Rust CLI port.");
-        }
     }
 
     Ok(())
@@ -722,7 +723,7 @@ async fn safe_append(canister: &Canister<'_>, entries: Vec<Vec<u8>>) -> Result<u
         entries.len(),
         if entries.len() == 1 { "y" } else { "ies" }
     );
-    let mut certified: Option<Vec<u8>> = None;
+    let mut _certified: Option<Vec<u8>> = None;
 
     // Call prepare
     match canister
@@ -733,7 +734,7 @@ async fn safe_append(canister: &Canister<'_>, entries: Vec<Vec<u8>>) -> Result<u
         .await
     {
         Ok((cert,)) => {
-            certified = Some(cert);
+            _certified = Some(cert);
         }
         Err(e) => {
             // Concurrent prepare raced us — commit the other writer's data then retry
@@ -755,7 +756,7 @@ async fn safe_append(canister: &Canister<'_>, entries: Vec<Vec<u8>>) -> Result<u
                         .call_and_wait()
                         .await
                         .context("Retry prepare failed")?;
-                    certified = Some(cert3);
+                    _certified = Some(cert3);
                 } else {
                     return Err(e.into());
                 }
@@ -765,7 +766,7 @@ async fn safe_append(canister: &Canister<'_>, entries: Vec<Vec<u8>>) -> Result<u
         }
     }
 
-    let cert_hex = to_hex(certified.as_ref().unwrap());
+    let cert_hex = to_hex(_certified.as_ref().unwrap());
     println!(
         "  certified_data: {}...",
         &cert_hex.chars().take(32).collect::<String>()
@@ -809,7 +810,7 @@ fn verify_block(block: &Block) -> Result<(), Vec<String>> {
         // Construct the 4-byte big-endian key for the index
         let key = (i as u32).to_be_bytes();
 
-        let mut path_iter = vec![Label::from("certified_blocks"), Label::from(key.to_vec())];
+        let path_iter = [Label::from("certified_blocks"), Label::from(key.to_vec())];
 
         let found = block_tree.lookup_path(path_iter.iter());
         match found {
@@ -833,10 +834,8 @@ fn verify_block(block: &Block) -> Result<(), Vec<String>> {
     }
 
     // 2. previous_hash field matches certified value in tree
-    let mut ph_path = vec![
-        Label::from("certified_blocks"),
-        Label::from("previous_hash"),
-    ];
+    let ph_path = [Label::from("certified_blocks"),
+        Label::from("previous_hash")];
     let found_ph = block_tree.lookup_path(ph_path.iter());
     match found_ph {
         LookupResult::Found(tree_ph) => {

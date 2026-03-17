@@ -311,7 +311,7 @@ impl<'a> HashTreeNode<'a> {
             HashTreeNode::Leaf(_) => "ic-hashtree-leaf",
             HashTreeNode::Pruned(_) => return,
         };
-        hasher.update(&[domain_sep.len() as u8]);
+        hasher.update([domain_sep.len() as u8]);
         hasher.update(domain_sep.as_bytes());
     }
 
@@ -324,12 +324,12 @@ impl<'a> HashTreeNode<'a> {
         match self {
             HashTreeNode::Empty() => {}
             HashTreeNode::Fork(nodes) => {
-                hasher.update(&nodes.0.digest());
-                hasher.update(&nodes.1.digest());
+                hasher.update(nodes.0.digest());
+                hasher.update(nodes.1.digest());
             }
             HashTreeNode::Labeled(label, node) => {
-                hasher.update(&label.as_bytes());
-                hasher.update(&node.digest());
+                hasher.update(label.as_bytes());
+                hasher.update(node.digest());
             }
             HashTreeNode::Leaf(bytes) => {
                 hasher.update(bytes);
