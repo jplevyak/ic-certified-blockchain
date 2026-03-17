@@ -345,7 +345,15 @@ async fn main() -> Result<()> {
             }
 
             if *verify {
-                println!("Verification not fully fully implemented offline yet in this CLI.");
+                match verify_block(&block) {
+                    Ok(_) => println!("Verification successful: tree and hashes are internally consistent."),
+                    Err(errors) => {
+                        println!("Verification failed:");
+                        for err in errors {
+                            println!("  ! {}", err);
+                        }
+                    }
+                }
             }
         }
         Commands::Append { entries, file, hex } => {
