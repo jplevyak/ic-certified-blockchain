@@ -313,11 +313,6 @@ function verifyChainHashes(blocks) {
   for (let i = 1; i < blocks.length; i++) {
     if (blocks[i].index !== blocks[i - 1].index + 1) continue; // non-contiguous range, skip
     const actualPh = new Uint8Array(blocks[i].block.previous_hash);
-    // All-zeros previous_hash = rotation boundary; the primary log restarted
-    if (actualPh.every(b => b === 0)) {
-      console.log(`  Note: block ${blocks[i].index} previous_hash is zero (rotation boundary — chain restarted)`);
-      continue;
-    }
     const expectedPh = blockHash(blocks[i - 1].block);
     if (!isEqBuf(expectedPh, actualPh)) {
       issues.push(

@@ -1,3 +1,10 @@
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "../hash_tree.rs"]
+mod hash_tree;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod cli_impl {
+use super::hash_tree::{HashTree, Label, LookupResult};
 use anyhow::{Context, Result};
 use candid::{CandidType, Deserialize, Principal};
 use clap::{Parser, Subcommand};
@@ -9,9 +16,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 
-#[path = "../hash_tree.rs"]
-mod hash_tree;
-use hash_tree::{HashTree, Label, LookupResult};
+
 
 use ic_certificate_verification::VerifyCertificate;
 use ic_certification::Certificate;
@@ -328,12 +333,22 @@ async fn make_agent(cli: &Cli) -> Result<(Agent, Principal)> {
     Ok((agent, canister_id))
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn main() -> Result<()> {
+    println!("Starting cli_impl::main");
     // Load .env if present
     let _ = dotenv();
+    println!("Parsing args");
     let cli = Cli::parse();
+    println!("Running CLI logic");
+    run_cli(cli).await
+}
 
+async fn run_cli(cli: Cli) -> Result<()> {
+    println!("Entering run_cli");
     let (agent, canister_id) = make_agent(&cli).await?;
     let canister = CanisterBuilder::new()
         .with_agent(&agent)
@@ -961,7 +976,7 @@ async fn safe_append(canister: &Canister<'_>, entries: Vec<Vec<u8>>) -> Result<u
 // ── Block verification ───────────────────────────────────────────────────────
 
 fn block_hash(block: &Block) -> Result<[u8; 32]> {
-    let enc = candid::encode_one(block)?;
+    let enc = candid::encode_args((block,))?;
     Ok(sha256bytes(&enc))
 }
 
@@ -982,10 +997,6 @@ fn verify_chain_hashes(records: &[(u64, Block)]) -> Result<Vec<String>> {
         }
 
         let actual_ph = &records[i].1.previous_hash;
-        if actual_ph.iter().all(|&b| b == 0) {
-            println!("  Note: block {} previous_hash is zero (rotation boundary — chain restarted)", records[i].0);
-            continue;
-        }
 
         let expected_ph = block_hash(&records[i - 1].1)?;
         if actual_ph != &expected_ph {
@@ -1094,3 +1105,13 @@ fn verify_block(
         Err(errors)
     }
 }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    cli_impl::main().await
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}

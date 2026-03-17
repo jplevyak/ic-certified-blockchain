@@ -231,8 +231,8 @@ fn get_previous_hash() -> Hash {
     primary_log().with(|l| {
         let l = l.borrow();
         if l.len() > 0 {
-            previous_hash =
-                sha2::Sha256::digest(Encode!(&l.get(l.len() - 1).unwrap()).unwrap()).into();
+            let encoded_block = l.get(l.len() - 1).unwrap();
+            previous_hash = sha2::Sha256::digest(&encoded_block).into();
         }
     });
     previous_hash
@@ -390,8 +390,11 @@ fn log_hash(log: &'static std::thread::LocalKey<RefCell<Log<Blob, Memory, Memory
 #[ic_cdk_macros::update(guard = "is_authorized_user")]
 #[candid_method]
 fn rotate() -> Option<u64> {
+    let current_head_hash = get_previous_hash();
     let mut metadata = METADATA.with(|m| m.borrow().get().clone());
     let old_base_index = metadata.base_index;
+    metadata.previous_hash = current_head_hash;
+
     LOGA.with(|loga| {
         LOGB.with(|logb| {
             MAPA.with(|mapa| {
@@ -539,3 +542,59 @@ fn main() {
 
 #[cfg(target_arch = "wasm32")]
 fn main() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rotate_hash_continuity() {
+        METADATA.with(|m| {
+            m.borrow_mut().set(Metadata {
+                previous_hash: [0u8; 32],
+                base_index: 0,
+                b_is_primary: false,
+            });
+        });
+
+        let genesis_hash = get_previous_hash();
+        assert_eq!(genesis_hash, [0u8; 32], "Initial state should be genesis zero-hash");
+
+        let p1 = candid::Principal::from_slice(&[0; 29]);
+
+        // Build a mock block manually to sidestep `commit` and its WASM dependencies
+        let mock_block = Block {
+            certificate: vec![],
+            tree: vec![],
+            data: vec![vec![1, 2, 3]],
+            callers: vec![p1],
+            previous_hash: genesis_hash,
+        };
+
+        // Serialize and append to the primary log directly
+        let encoded_block = Encode!(&mock_block).unwrap();
+        primary_log().with(|l| {
+            l.borrow_mut().append(&encoded_block).unwrap();
+        });
+
+        // This is normally inside `commit()`, but since we bypassed it we must execute the index bumps
+        METADATA.with(|m| {
+            let mut bm = m.borrow_mut();
+            let mut data = bm.get().clone();
+            data.base_index += 1;
+            bm.set(data);
+        });
+
+        // Hash before should represent the block hash, but get_previous_hash()
+        // reads the LAST block via metadata logic. Let's make sure log rot carries it.
+        let hash_before = get_previous_hash();
+        assert_ne!(hash_before, [0u8; 32], "Hash should be updated after block append");
+
+        // Execute rotation
+        rotate();
+
+        let hash_after = get_previous_hash();
+        assert_eq!(hash_after, hash_before, "Hash continuity broken across log rotation");
+        assert_ne!(hash_after, [0u8; 32], "Hash should not be completely reset to zero");
+    }
+}

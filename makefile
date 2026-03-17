@@ -12,7 +12,8 @@ redeploy: build
 restart:
 	-dfx stop
 	dfx start --clean --background
-	RUSTFLAGS='-C target-feature=+bulk-memory' dfx deploy --all
+	RUSTFLAGS='-C target-feature=+bulk-memory' dfx deploy
+	dfx canister call ic-certified-blockchain authorize '(principal "vkgr6-2tybk-buvwc-vwohz-6muzj-5mqpb-ul5bi-ewcq5-47dxq-aq55y-uae", variant{ Admin})'
 
 test:
 	(cd tests; node test.js)

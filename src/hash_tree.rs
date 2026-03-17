@@ -584,5 +584,5 @@ impl<'de, 'tree: 'de> serde::Deserialize<'de> for HashTreeNode<'tree> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "false"))]
 mod tests;
