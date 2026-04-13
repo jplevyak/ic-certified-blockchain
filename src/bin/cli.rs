@@ -1056,7 +1056,7 @@ fn verify_block(
                 hasher.update(data_hash);
                 let expected = hasher.finalize();
 
-                if tree_hash != expected.as_slice() {
+                if tree_hash != &expected[..] {
                     errors.push(format!("entry[{}] hash mismatch in tree", i));
                 }
             }
